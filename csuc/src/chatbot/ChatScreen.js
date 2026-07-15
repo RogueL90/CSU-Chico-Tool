@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import MessageBubble from './components/MessageBubble';
 import { askKnowledgeBase } from '../../aws-bedrock/knowledgeBase';
+import { findPlace } from '../../maps-api/places';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const GREETING = "I'm Willie, and I'm here to help you find the right campus office or service and point you in the right direction.";
@@ -40,11 +41,16 @@ async function dialNumber(phoneNumber) {
   }
 }
 
+// Capitalized phrase ending in a campus-building keyword,
+// e.g. "Meriam Library", "Kendall Hall", "Bell Memorial Union".
+const PLACE_REGEX =
+  /\b(?:[A-Z][a-zA-Z'’.]*\s+)+(?:Hall|Library|Center|Centre|Building|Stadium|Gym|Gymnasium|Union|Complex|Commons|Pavilion|Theatre|Theater|Arena|Field House)\b/;
+
 /**
  * Attempt to extract structured data from the Bedrock response text.
  * The knowledge base may return phone numbers, building names, or coords.
- * For now we return the raw text; as the KB responses become more structured
- * we can parse map/phone data here.
+ * Building names are returned as placeQuery so the caller can look up
+ * coordinates via the Places API.
  */
 function parseBedrockResponse(response) {
   const text = response?.output?.text || 'Sorry, I could not find an answer.';
@@ -53,18 +59,21 @@ function parseBedrockResponse(response) {
   const phoneMatch = text.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
   const phone = phoneMatch ? phoneMatch[0].replace(/\D/g, '') : null;
 
+  // Try to detect a campus building name in the response
+  const placeMatch = text.match(PLACE_REGEX);
+  const placeQuery = placeMatch ? placeMatch[0] : null;
+
   // Build the result
   const result = {
     text,
     phone,
-    // Map data would come from structured KB metadata in the future
-    map: null,
+    map: null, // filled in by the caller if the Places lookup succeeds
   };
 
   const outputTypes = ['text'];
   if (phone) outputTypes.push('phone');
 
-  return { outputs: result, outputTypes };
+  return { outputs: result, outputTypes, placeQuery };
 }
 
 // ─── ChatScreen ───────────────────────────────────────────────────────────────
@@ -93,11 +102,20 @@ export default function ChatScreen() {
 
     try {
       const response = await askKnowledgeBase(userText);
-      const { outputs, outputTypes } = parseBedrockResponse(response);
+      const { outputs, outputTypes, placeQuery } = parseBedrockResponse(response);
 
       // Show phone in persistent bar if detected
       if (outputs.phone) {
         setPersistentPhone({ number: outputs.phone, label: 'Suggested Contact' });
+      }
+
+      // If the answer mentions a campus building, look up its coordinates
+      if (placeQuery) {
+        const place = await findPlace(`${placeQuery}, Chico State`);
+        if (place) {
+          outputs.map = { label: place.label, lat: place.lat, lng: place.lng };
+          outputTypes.push('map');
+        }
       }
 
       const resultMsg = {
