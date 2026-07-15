@@ -1,3 +1,6 @@
+// Polyfills for globals the AWS SDK expects. Must be imported first.
+import './polyfills';
+
 import { registerRootComponent } from 'expo';
 
 import App from './App';
