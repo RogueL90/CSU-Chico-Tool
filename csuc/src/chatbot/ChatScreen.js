@@ -12,26 +12,12 @@ import {
   Keyboard,
   Linking,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import MessageBubble from './components/MessageBubble';
+import { askKnowledgeBase } from '../../aws-bedrock/knowledgeBase';
 
-// ─── Placeholder data ────────────────────────────────────────────────────────
-// Step 1 choices shown after any first input
-const STEP1_CHOICES = [
-  { id: 'a', label: 'Money, tuition, or financial aid' },
-  { id: 'b', label: 'Classes, enrollment, or records' },
-];
-
-// The result shown after any step-2 input (hardcoded for testing)
-const PLACEHOLDER_RESULT = {
-  outputs: {
-    text: 'The Financial Aid Office is in Kendall Hall, Room 200. Hours: Mon–Fri 8am–5pm.',
-    phone: '5308986451',
-    map: { label: 'Kendall Hall – Financial Aid', lat: 39.72848, lng: -121.84726 },
-  },
-  outputTypes: ['text', 'map'],
-};
-
+// ─── Constants ───────────────────────────────────────────────────────────────
 const GREETING = "Hi! I'm the Chico State assistant. What do you need help with today?";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -53,20 +39,39 @@ async function dialNumber(phoneNumber) {
   }
 }
 
-// ─── Flow states ──────────────────────────────────────────────────────────────
-// 'idle'    → waiting for first input
-// 'step1'   → showing 2 choice chips above input
-// 'result'  → showing map + call output
-const IDLE   = 'idle';
-const STEP1  = 'step1';
-const RESULT = 'result';
+/**
+ * Attempt to extract structured data from the Bedrock response text.
+ * The knowledge base may return phone numbers, building names, or coords.
+ * For now we return the raw text; as the KB responses become more structured
+ * we can parse map/phone data here.
+ */
+function parseBedrockResponse(response) {
+  const text = response?.output?.text || 'Sorry, I could not find an answer.';
+
+  // Try to detect a phone number in the response (10-digit US)
+  const phoneMatch = text.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+  const phone = phoneMatch ? phoneMatch[0].replace(/\D/g, '') : null;
+
+  // Build the result
+  const result = {
+    text,
+    phone,
+    // Map data would come from structured KB metadata in the future
+    map: null,
+  };
+
+  const outputTypes = ['text'];
+  if (phone) outputTypes.push('phone');
+
+  return { outputs: result, outputTypes };
+}
 
 // ─── ChatScreen ───────────────────────────────────────────────────────────────
 export default function ChatScreen() {
   const listRef = useRef(null);
   const [inputText, setInputText] = useState('');
   const [messages, setMessages] = useState([]);
-  const [flowState, setFlowState] = useState(IDLE);
+  const [loading, setLoading] = useState(false);
   const [persistentPhone, setPersistentPhone] = useState(null);
 
   const pushMessages = useCallback((newMsgs) => {
@@ -79,60 +84,59 @@ export default function ChatScreen() {
     setMessages([{ id: uid(), role: 'bot', type: 'text', text: GREETING }]);
   }, []);
 
-  // ── Advance to step 1 (show 2 chips) ─────────────────────────────────────
-  const advanceToStep1 = useCallback((userText) => {
+  // ── Send a message to Bedrock and handle the response ─────────────────────
+  const sendToBedrock = useCallback(async (userText) => {
     const userMsg = { id: uid(), role: 'user', type: 'text', text: userText };
-    const botMsg  = { id: uid(), role: 'bot',  type: 'text', text: 'Can you tell me a bit more?' };
-    pushMessages([userMsg, botMsg]);
-    setFlowState(STEP1);
-  }, [pushMessages]);
+    pushMessages([userMsg]);
+    setLoading(true);
 
-  // ── Advance to result (show map + call) ───────────────────────────────────
-  const advanceToResult = useCallback((userText) => {
-    const userMsg = { id: uid(), role: 'user', type: 'text', text: userText };
-    const resultMsg = {
-      id: uid(),
-      role: 'bot',
-      type: 'result',
-      text: "Here's what I found:",
-      outputs: PLACEHOLDER_RESULT.outputs,
-      outputTypes: PLACEHOLDER_RESULT.outputTypes,
-    };
-    setPersistentPhone({
-      number: PLACEHOLDER_RESULT.outputs.phone,
-      label: 'Financial Aid Office',
-    });
-    pushMessages([userMsg, resultMsg]);
-    setFlowState(RESULT);
+    try {
+      const response = await askKnowledgeBase(userText);
+      const { outputs, outputTypes } = parseBedrockResponse(response);
+
+      // Show phone in persistent bar if detected
+      if (outputs.phone) {
+        setPersistentPhone({ number: outputs.phone, label: 'Suggested Contact' });
+      }
+
+      const resultMsg = {
+        id: uid(),
+        role: 'bot',
+        type: 'result',
+        text: null, // text goes inside TextOutput via outputs
+        outputs,
+        outputTypes,
+      };
+      pushMessages([resultMsg]);
+    } catch (error) {
+      console.error('Bedrock query failed:', error);
+      const errMsg = {
+        id: uid(),
+        role: 'bot',
+        type: 'text',
+        text: "Sorry, I had trouble connecting. Please try again in a moment.",
+      };
+      pushMessages([errMsg]);
+    } finally {
+      setLoading(false);
+    }
   }, [pushMessages]);
 
   // ── Handle bottom-bar send ────────────────────────────────────────────────
   const handleSend = useCallback(() => {
     const text = inputText.trim();
-    if (!text) return;
+    if (!text || loading) return;
     Keyboard.dismiss();
     setInputText('');
-
-    if (flowState === IDLE || flowState === RESULT) {
-      advanceToStep1(text);
-    } else if (flowState === STEP1) {
-      advanceToResult(text);
-    }
-  }, [inputText, flowState, advanceToStep1, advanceToResult]);
-
-  // ── Handle chip press ────────────────────────────────────────────────────
-  const handleChip = useCallback((choice) => {
-    if (flowState === STEP1) {
-      advanceToResult(choice.label);
-    }
-  }, [flowState, advanceToResult]);
+    sendToBedrock(text);
+  }, [inputText, loading, sendToBedrock]);
 
   // ── Restart ───────────────────────────────────────────────────────────────
   const handleRestart = useCallback(() => {
     _id = 0;
-    setFlowState(IDLE);
     setPersistentPhone(null);
     setInputText('');
+    setLoading(false);
     setMessages([{ id: uid(), role: 'bot', type: 'text', text: GREETING }]);
   }, []);
 
@@ -140,12 +144,6 @@ export default function ChatScreen() {
   const formattedPhone = persistentPhone?.number.replace(
     /(\d{3})(\d{3})(\d{4})/, '($1) $2-$3'
   );
-
-  // Placeholder text for the input changes based on state
-  const inputPlaceholder =
-    flowState === STEP1   ? 'Other…' :
-    flowState === RESULT  ? 'Ask another question…' :
-                            'Type your question…';
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -184,6 +182,14 @@ export default function ChatScreen() {
           showsVerticalScrollIndicator={false}
         />
 
+        {/* ── Typing indicator ── */}
+        {loading && (
+          <View style={styles.typingBar}>
+            <ActivityIndicator size="small" color="#003366" />
+            <Text style={styles.typingText}>Thinking…</Text>
+          </View>
+        )}
+
         {/* ── Persistent call bar ── */}
         {persistentPhone && (
           <TouchableOpacity
@@ -206,41 +212,24 @@ export default function ChatScreen() {
           </TouchableOpacity>
         )}
 
-        {/* ── Step-1 choice chips — sit above input bar ── */}
-        {flowState === STEP1 && (
-          <View style={styles.chipsBar}>
-            {STEP1_CHOICES.map((choice) => (
-              <TouchableOpacity
-                key={choice.id}
-                style={styles.chip}
-                onPress={() => handleChip(choice)}
-                activeOpacity={0.78}
-                accessibilityRole="button"
-                accessibilityLabel={choice.label}
-              >
-                <Text style={styles.chipText}>{choice.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
         {/* ── Input bar — always visible ── */}
         <View style={styles.inputBar}>
           <TextInput
             style={styles.input}
             value={inputText}
             onChangeText={setInputText}
-            placeholder={inputPlaceholder}
+            placeholder="Type your question…"
             placeholderTextColor="#aaa"
             returnKeyType="send"
             onSubmitEditing={handleSend}
             blurOnSubmit={false}
+            editable={!loading}
             accessibilityLabel="Type your question"
           />
           <TouchableOpacity
-            style={[styles.sendBtn, !inputText.trim() && styles.sendBtnDisabled]}
+            style={[styles.sendBtn, (!inputText.trim() || loading) && styles.sendBtnDisabled]}
             onPress={handleSend}
-            disabled={!inputText.trim()}
+            disabled={!inputText.trim() || loading}
             accessibilityRole="button"
             accessibilityLabel="Send message"
           >
@@ -268,7 +257,7 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
   },
   headerTitle: { color: '#fff', fontSize: 17, fontWeight: '700', letterSpacing: 0.2 },
-  headerSub:   { color: 'rgba(255,255,255,0.65)', fontSize: 12, marginTop: 2 },
+  headerSub: { color: 'rgba(255,255,255,0.65)', fontSize: 12, marginTop: 2 },
   restartBtn: {
     backgroundColor: 'rgba(255,255,255,0.15)',
     borderRadius: 10,
@@ -279,6 +268,16 @@ const styles = StyleSheet.create({
 
   // Message list
   listContent: { paddingTop: 14, paddingBottom: 10 },
+
+  // Typing indicator
+  typingBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  typingText: { fontSize: 13, color: '#666', fontStyle: 'italic' },
 
   // Persistent call bar
   callBar: {
@@ -303,29 +302,6 @@ const styles = StyleSheet.create({
     marginLeft: 10,
   },
   callBarBtnTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
-
-  // Choice chips bar (sits between list and input)
-  chipsBar: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: '#E4EAF0',
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 8,
-    gap: 8,
-  },
-  chip: {
-    flex: 1,
-    backgroundColor: '#E8F0F8',
-    borderRadius: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderWidth: 1.5,
-    borderColor: '#B8CCE4',
-    alignItems: 'center',
-  },
-  chipText: { fontSize: 14, color: '#003366', fontWeight: '600', textAlign: 'center' },
 
   // Input bar
   inputBar: {
