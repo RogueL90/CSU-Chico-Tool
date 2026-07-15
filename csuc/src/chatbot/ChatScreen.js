@@ -18,7 +18,7 @@ import MessageBubble from './components/MessageBubble';
 import { askKnowledgeBase } from '../../aws-bedrock/knowledgeBase';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const GREETING = "Hi, I'm Willie. Ask me about classes, campus services, deadlines, dining, or Wildcat life.";
+const GREETING = "I'm Willie, and I'm here to help you find the right campus office or service and point you in the right direction.";
 const STARTER_QUESTIONS = ['Add/drop date', 'Advising', 'Dining hours'];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@ export default function ChatScreen() {
           </View>
           <View>
             <Text style={styles.eyebrow}>CHICO STATE</Text>
-            <Text style={styles.headerTitle}>Ask Willie</Text>
+            <Text style={styles.headerTitle}>Call Willie</Text>
           </View>
         </View>
         <View style={styles.headerActions}>
@@ -202,7 +202,7 @@ export default function ChatScreen() {
                     onPress={() => sendToBedrock(question)}
                     disabled={loading}
                     accessibilityRole="button"
-                    accessibilityLabel={`Ask Willie about ${question}`}
+                    accessibilityLabel={`Call Willie about ${question}`}
                   >
                     <Text style={styles.starterChipText}>{question}</Text>
                   </TouchableOpacity>
@@ -253,7 +253,7 @@ export default function ChatScreen() {
             style={styles.input}
             value={inputText}
             onChangeText={setInputText}
-            placeholder="Ask Willie something…"
+            placeholder="Call Willie for help…"
             placeholderTextColor="#8D7C7F"
             returnKeyType="send"
             onSubmitEditing={handleSend}
