@@ -15,10 +15,9 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import MessageBubble from './components/MessageBubble';
-import { askKnowledgeBase } from '../../aws-bedrock/knowledgeBase';
-import { findPlace } from '../../maps-api/places';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
+const BACKEND_URL = 'http://localhost:8000';
 const GREETING = "I'm Willie, and I'm here to help you find the right campus office or service and point you in the right direction.";
 const STARTER_QUESTIONS = ['Add/drop date', 'Advising', 'Dining hours'];
 
@@ -41,39 +40,24 @@ async function dialNumber(phoneNumber) {
   }
 }
 
-// Capitalized phrase ending in a campus-building keyword,
-// e.g. "Meriam Library", "Kendall Hall", "Bell Memorial Union".
-const PLACE_REGEX =
-  /\b(?:[A-Z][a-zA-Z'’.]*\s+)+(?:Hall|Library|Center|Centre|Building|Stadium|Gym|Gymnasium|Union|Complex|Commons|Pavilion|Theatre|Theater|Arena|Field House)\b/;
-
 /**
- * Attempt to extract structured data from the Bedrock response text.
- * The knowledge base may return phone numbers, building names, or coords.
- * Building names are returned as placeQuery so the caller can look up
- * coordinates via the Places API.
+ * Call the Strands backend /ask endpoint.
  */
-function parseBedrockResponse(response) {
-  const text = response?.output?.text || 'Sorry, I could not find an answer.';
+async function askBackend(query, conversationHistory = []) {
+  const response = await fetch(`${BACKEND_URL}/ask`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query,
+      conversation_history: conversationHistory,
+    }),
+  });
 
-  // Try to detect a phone number in the response (10-digit US)
-  const phoneMatch = text.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
-  const phone = phoneMatch ? phoneMatch[0].replace(/\D/g, '') : null;
+  if (!response.ok) {
+    throw new Error(`Backend returned ${response.status}`);
+  }
 
-  // Try to detect a campus building name in the response
-  const placeMatch = text.match(PLACE_REGEX);
-  const placeQuery = placeMatch ? placeMatch[0] : null;
-
-  // Build the result
-  const result = {
-    text,
-    phone,
-    map: null, // filled in by the caller if the Places lookup succeeds
-  };
-
-  const outputTypes = ['text'];
-  if (phone) outputTypes.push('phone');
-
-  return { outputs: result, outputTypes, placeQuery };
+  return response.json();
 }
 
 // ─── ChatScreen ───────────────────────────────────────────────────────────────
@@ -83,6 +67,8 @@ export default function ChatScreen() {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [persistentPhone, setPersistentPhone] = useState(null);
+  const [followUpChoices, setFollowUpChoices] = useState(null);
+  const conversationRef = useRef([]);
 
   const pushMessages = useCallback((newMsgs) => {
     setMessages((prev) => [...prev, ...newMsgs]);
@@ -94,52 +80,84 @@ export default function ChatScreen() {
     setMessages([{ id: uid(), role: 'bot', type: 'text', text: GREETING }]);
   }, []);
 
-  // ── Send a message to Bedrock and handle the response ─────────────────────
-  const sendToBedrock = useCallback(async (userText) => {
+  // ── Process structured backend response ───────────────────────────────────
+  const handleBackendResponse = useCallback((data) => {
+    // Clear any existing follow-up choices
+    setFollowUpChoices(null);
+
+    // Phone → persistent bar
+    if (data.phone && data.output_types.includes('phone')) {
+      setPersistentPhone({ number: data.phone, label: 'Suggested Contact' });
+    }
+
+    // If low confidence → show follow-up choices
+    if (data.confidence < 80 && data.follow_up_choices) {
+      // Show partial text if available
+      if (data.text) {
+        pushMessages([{
+          id: uid(),
+          role: 'bot',
+          type: 'text',
+          text: data.follow_up_question || data.text,
+        }]);
+      } else if (data.follow_up_question) {
+        pushMessages([{
+          id: uid(),
+          role: 'bot',
+          type: 'text',
+          text: data.follow_up_question,
+        }]);
+      }
+      setFollowUpChoices(data.follow_up_choices);
+      return;
+    }
+
+    // High confidence → render full result
+    const resultMsg = {
+      id: uid(),
+      role: 'bot',
+      type: 'result',
+      text: null,
+      outputs: {
+        text: data.text,
+        map: data.map,
+      },
+      outputTypes: data.output_types.filter((t) => t !== 'phone'),
+    };
+    pushMessages([resultMsg]);
+  }, [pushMessages]);
+
+  // ── Send a message to the backend ─────────────────────────────────────────
+  const sendQuery = useCallback(async (userText) => {
     const userMsg = { id: uid(), role: 'user', type: 'text', text: userText };
     pushMessages([userMsg]);
+    setFollowUpChoices(null);
     setLoading(true);
 
+    // Track conversation for context
+    conversationRef.current.push({ role: 'user', text: userText });
+
     try {
-      const response = await askKnowledgeBase(userText);
-      const { outputs, outputTypes, placeQuery } = parseBedrockResponse(response);
+      const data = await askBackend(userText, conversationRef.current);
 
-      // Show phone in persistent bar if detected
-      if (outputs.phone) {
-        setPersistentPhone({ number: outputs.phone, label: 'Suggested Contact' });
+      // Track bot response in conversation
+      if (data.text) {
+        conversationRef.current.push({ role: 'bot', text: data.text });
       }
 
-      // If the answer mentions a campus building, look up its coordinates
-      if (placeQuery) {
-        const place = await findPlace(`${placeQuery}, Chico State`);
-        if (place) {
-          outputs.map = { label: place.label, lat: place.lat, lng: place.lng };
-          outputTypes.push('map');
-        }
-      }
-
-      const resultMsg = {
-        id: uid(),
-        role: 'bot',
-        type: 'result',
-        text: null, // text goes inside TextOutput via outputs
-        outputs,
-        outputTypes,
-      };
-      pushMessages([resultMsg]);
+      handleBackendResponse(data);
     } catch (error) {
-      console.error('Bedrock query failed:', error);
-      const errMsg = {
+      console.error('Backend query failed:', error);
+      pushMessages([{
         id: uid(),
         role: 'bot',
         type: 'text',
         text: "Sorry, I had trouble connecting. Please try again in a moment.",
-      };
-      pushMessages([errMsg]);
+      }]);
     } finally {
       setLoading(false);
     }
-  }, [pushMessages]);
+  }, [pushMessages, handleBackendResponse]);
 
   // ── Handle bottom-bar send ────────────────────────────────────────────────
   const handleSend = useCallback(() => {
@@ -147,15 +165,24 @@ export default function ChatScreen() {
     if (!text || loading) return;
     Keyboard.dismiss();
     setInputText('');
-    sendToBedrock(text);
-  }, [inputText, loading, sendToBedrock]);
+    sendQuery(text);
+  }, [inputText, loading, sendQuery]);
+
+  // ── Handle follow-up chip press ───────────────────────────────────────────
+  const handleChip = useCallback((choice) => {
+    if (loading) return;
+    setFollowUpChoices(null);
+    sendQuery(choice.label);
+  }, [loading, sendQuery]);
 
   // ── Restart ───────────────────────────────────────────────────────────────
   const handleRestart = useCallback(() => {
     _id = 0;
     setPersistentPhone(null);
+    setFollowUpChoices(null);
     setInputText('');
     setLoading(false);
+    conversationRef.current = [];
     setMessages([{ id: uid(), role: 'bot', type: 'text', text: GREETING }]);
   }, []);
 
@@ -217,10 +244,10 @@ export default function ChatScreen() {
                   <TouchableOpacity
                     key={question}
                     style={styles.starterChip}
-                    onPress={() => sendToBedrock(question)}
+                    onPress={() => sendQuery(question)}
                     disabled={loading}
                     accessibilityRole="button"
-                    accessibilityLabel={`Call Willie about ${question}`}
+                    accessibilityLabel={`Ask Willie about ${question}`}
                   >
                     <Text style={styles.starterChipText}>{question}</Text>
                   </TouchableOpacity>
@@ -265,13 +292,32 @@ export default function ChatScreen() {
           </TouchableOpacity>
         )}
 
+        {/* ── Follow-up choice chips (confidence < 80) ── */}
+        {followUpChoices && (
+          <View style={styles.chipsBar}>
+            {followUpChoices.map((choice) => (
+              <TouchableOpacity
+                key={choice.id}
+                style={styles.chip}
+                onPress={() => handleChip(choice)}
+                activeOpacity={0.78}
+                disabled={loading}
+                accessibilityRole="button"
+                accessibilityLabel={choice.label}
+              >
+                <Text style={styles.chipText}>{choice.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
         {/* ── Input bar — always visible ── */}
         <View style={styles.inputBar}>
           <TextInput
             style={styles.input}
             value={inputText}
             onChangeText={setInputText}
-            placeholder="Call Willie for help…"
+            placeholder={followUpChoices ? 'Other…' : 'Call Willie for help…'}
             placeholderTextColor="#8D7C7F"
             returnKeyType="send"
             onSubmitEditing={handleSend}
@@ -372,6 +418,29 @@ const styles = StyleSheet.create({
     marginLeft: 10,
   },
   callBarBtnTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
+
+  // Follow-up choice chips
+  chipsBar: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#F0DCDD',
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 8,
+    gap: 8,
+  },
+  chip: {
+    flex: 1,
+    backgroundColor: '#FFF0F1',
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1.5,
+    borderColor: '#F3C6CC',
+    alignItems: 'center',
+  },
+  chipText: { fontSize: 13, color: '#8B0A22', fontWeight: '600', textAlign: 'center' },
 
   // Input bar
   inputBar: {
