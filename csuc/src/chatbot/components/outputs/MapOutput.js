@@ -102,7 +102,7 @@ export default function MapOutput({ map }) {
           <Marker
             coordinate={{ latitude: lat, longitude: lng }}
             title={label}
-            pinColor="#003366"
+            pinColor="#C8102E"
           />
         </MapView>
 
@@ -144,9 +144,9 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#D6E4F0',
+    borderColor: '#F0DDDE',
     alignSelf: 'flex-start',
-    backgroundColor: '#e8f0f8',
+    backgroundColor: '#FFF0F1',
   },
   expandBadge: {
     position: 'absolute',
@@ -233,7 +233,7 @@ const styles = StyleSheet.create({
   backBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#003366',
+    backgroundColor: '#C8102E',
     borderRadius: 14,
     paddingVertical: 13,
     paddingHorizontal: 28,

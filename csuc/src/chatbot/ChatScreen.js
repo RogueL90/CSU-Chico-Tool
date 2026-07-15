@@ -18,7 +18,8 @@ import MessageBubble from './components/MessageBubble';
 import { askKnowledgeBase } from '../../aws-bedrock/knowledgeBase';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const GREETING = "Hi! I'm the Chico State assistant. What do you need help with today?";
+const GREETING = "Hi, I'm Willie. Ask me about classes, campus services, deadlines, dining, or Wildcat life.";
+const STARTER_QUESTIONS = ['Add/drop date', 'Advising', 'Dining hours'];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 let _id = 0;
@@ -149,18 +150,28 @@ export default function ChatScreen() {
     <SafeAreaView style={styles.safe}>
       {/* ── Header ── */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Chico State Assistant</Text>
-          <Text style={styles.headerSub}>Here to help you navigate campus</Text>
+        <View style={styles.brandRow}>
+          <View style={styles.brandMark}>
+            <Text style={styles.brandPaw}>🐾</Text>
+          </View>
+          <View>
+            <Text style={styles.eyebrow}>CHICO STATE</Text>
+            <Text style={styles.headerTitle}>Ask Willie</Text>
+          </View>
         </View>
-        <TouchableOpacity
-          style={styles.restartBtn}
-          onPress={handleRestart}
-          accessibilityRole="button"
-          accessibilityLabel="Start over"
-        >
-          <Text style={styles.restartTxt}>↺  New</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.restartBtn}
+            onPress={handleRestart}
+            accessibilityRole="button"
+            accessibilityLabel="Start over"
+          >
+            <Text style={styles.restartTxt}>↺</Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.headerSub}>
+          A campus chatbot for quick answers, student services, and Wildcat life.
+        </Text>
       </View>
 
       <KeyboardAvoidingView
@@ -175,6 +186,30 @@ export default function ChatScreen() {
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => <MessageBubble message={item} />}
           contentContainerStyle={styles.listContent}
+          ListHeaderComponent={(
+            <View style={styles.welcomeCard}>
+              <View style={styles.cardHeadingRow}>
+                <Text style={styles.cardTitle}>Your Helper Willie</Text>
+              </View>
+              <Text style={styles.cardBody}>
+                Try a starter question or type your own. Willie is ready to help you find your way around Chico State.
+              </Text>
+              <View style={styles.starterRow}>
+                {STARTER_QUESTIONS.map((question) => (
+                  <TouchableOpacity
+                    key={question}
+                    style={styles.starterChip}
+                    onPress={() => sendToBedrock(question)}
+                    disabled={loading}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Ask Willie about ${question}`}
+                  >
+                    <Text style={styles.starterChipText}>{question}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
           onContentSizeChange={() =>
             listRef.current?.scrollToEnd({ animated: true })
           }
@@ -185,8 +220,8 @@ export default function ChatScreen() {
         {/* ── Typing indicator ── */}
         {loading && (
           <View style={styles.typingBar}>
-            <ActivityIndicator size="small" color="#003366" />
-            <Text style={styles.typingText}>Thinking…</Text>
+            <ActivityIndicator size="small" color="#C8102E" />
+            <Text style={styles.typingText}>Willie is thinking…</Text>
           </View>
         )}
 
@@ -218,8 +253,8 @@ export default function ChatScreen() {
             style={styles.input}
             value={inputText}
             onChangeText={setInputText}
-            placeholder="Type your question…"
-            placeholderTextColor="#aaa"
+            placeholder="Ask Willie something…"
+            placeholderTextColor="#8D7C7F"
             returnKeyType="send"
             onSubmitEditing={handleSend}
             blurOnSubmit={false}
@@ -233,7 +268,7 @@ export default function ChatScreen() {
             accessibilityRole="button"
             accessibilityLabel="Send message"
           >
-            <Text style={styles.sendTxt}>↑</Text>
+            <Text style={styles.sendTxt}>Send</Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -243,7 +278,7 @@ export default function ChatScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F7FAFD' },
+  safe: { flex: 1, backgroundColor: '#FFF7F3' },
   flex: { flex: 1 },
 
   // Header
@@ -251,23 +286,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#003366',
+    flexWrap: 'wrap',
+    backgroundColor: '#C8102E',
     paddingHorizontal: 18,
-    paddingTop: 14,
-    paddingBottom: 14,
+    paddingTop: 16,
+    paddingBottom: 18,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
   },
-  headerTitle: { color: '#fff', fontSize: 17, fontWeight: '700', letterSpacing: 0.2 },
-  headerSub: { color: 'rgba(255,255,255,0.65)', fontSize: 12, marginTop: 2 },
+  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  brandMark: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  brandPaw: { fontSize: 23 },
+  eyebrow: { color: '#FFE6E6', fontSize: 11, fontWeight: '800', letterSpacing: 0.8 },
+  headerTitle: { color: '#fff', fontSize: 25, fontWeight: '800', letterSpacing: -0.4 },
+  headerSub: { width: '100%', color: '#fff', fontSize: 14, lineHeight: 20, marginTop: 14, fontWeight: '500' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   restartBtn: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    borderRadius: 10,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 16,
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  restartTxt: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  restartTxt: { color: '#fff', fontSize: 19, fontWeight: '700' },
 
   // Message list
-  listContent: { paddingTop: 14, paddingBottom: 10 },
+  listContent: { paddingTop: 18, paddingBottom: 10 },
+  welcomeCard: { marginHorizontal: 16, marginBottom: 16, padding: 17, borderRadius: 20, backgroundColor: '#fff', borderWidth: 1, borderColor: '#F1D7D8' },
+  cardHeadingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
+  cardTitle: { color: '#7A0019', fontSize: 18, fontWeight: '800', flex: 1 },
+  cardBody: { color: '#65575A', fontSize: 13, lineHeight: 19, marginTop: 8 },
+  starterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 13 },
+  starterChip: { backgroundColor: '#FFF0F1', borderWidth: 1, borderColor: '#F3C6CC', borderRadius: 18, paddingHorizontal: 12, paddingVertical: 8 },
+  starterChipText: { color: '#8B0A22', fontSize: 12, fontWeight: '700' },
 
   // Typing indicator
   typingBar: {
@@ -277,18 +329,18 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     gap: 8,
   },
-  typingText: { fontSize: 13, color: '#666', fontStyle: 'italic' },
+  typingText: { fontSize: 13, color: '#725E62', fontStyle: 'italic' },
 
   // Persistent call bar
   callBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#1A5C38',
+    backgroundColor: '#7A0019',
     paddingHorizontal: 16,
     paddingVertical: 11,
     borderTopWidth: 1,
-    borderTopColor: '#14482C',
+    borderTopColor: '#5B0013',
   },
   callBarLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
   callBarIcon: { fontSize: 20 },
@@ -310,27 +362,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: '#E4EAF0',
-    backgroundColor: '#fff',
+    borderTopColor: '#F0DCDD',
+    backgroundColor: '#FFF9F6',
     gap: 8,
   },
   input: {
     flex: 1,
-    backgroundColor: '#F0F4F8',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E8D8D8',
     borderRadius: 22,
     paddingHorizontal: 16,
     paddingVertical: Platform.OS === 'ios' ? 10 : 8,
     fontSize: 15,
-    color: '#1a1a1a',
+    color: '#2C2022',
   },
   sendBtn: {
-    backgroundColor: '#003366',
-    width: 40,
+    backgroundColor: '#C8102E',
+    minWidth: 58,
     height: 40,
     borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  sendBtnDisabled: { backgroundColor: '#B8CCE4' },
-  sendTxt: { color: '#fff', fontSize: 18, fontWeight: '700', lineHeight: 22 },
+  sendBtnDisabled: { backgroundColor: '#D9AEB5' },
+  sendTxt: { color: '#fff', fontSize: 13, fontWeight: '800' },
 });

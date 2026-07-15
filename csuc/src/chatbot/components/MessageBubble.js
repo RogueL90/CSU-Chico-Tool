@@ -67,7 +67,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   userBubble: {
-    backgroundColor: '#003366',
+    backgroundColor: '#C8102E',
     borderRadius: 18,
     borderBottomRightRadius: 4,
     paddingVertical: 10,
@@ -86,7 +86,9 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: '#E8F0F8',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#F0DDDE',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 8,
@@ -96,7 +98,9 @@ const styles = StyleSheet.create({
   avatarEmoji: { fontSize: 17 },
   botContent: { flex: 1 },
   botBubble: {
-    backgroundColor: '#F0F4F8',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#F0DDDE',
     borderRadius: 18,
     borderBottomLeftRadius: 4,
     paddingVertical: 10,
@@ -104,6 +108,6 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     maxWidth: '92%',
   },
-  botText: { color: '#1a1a1a', fontSize: 15, lineHeight: 22 },
+  botText: { color: '#2C2022', fontSize: 15, lineHeight: 22 },
   outputsContainer: { marginTop: 4 },
 });

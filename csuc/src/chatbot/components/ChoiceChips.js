@@ -123,24 +123,24 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   chip: {
-    backgroundColor: '#E8F0F8',
+    backgroundColor: '#FFF0F1',
     borderRadius: 20,
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderWidth: 1.5,
-    borderColor: '#B8CCE4',
+    borderColor: '#F3C6CC',
     alignSelf: 'flex-start',
   },
   chipSelected: {
-    backgroundColor: '#003366',
-    borderColor: '#003366',
+    backgroundColor: '#C8102E',
+    borderColor: '#C8102E',
   },
   chipDimmed: {
     opacity: 0.35,
   },
   chipText: {
     fontSize: 14,
-    color: '#003366',
+    color: '#8B0A22',
     fontWeight: '500',
   },
   chipTextSelected: {
@@ -159,7 +159,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
     borderRadius: 20,
     borderWidth: 1.5,
-    borderColor: '#B8CCE4',
+    borderColor: '#F3C6CC',
     paddingHorizontal: 14,
     paddingVertical: 2,
     alignSelf: 'stretch',
@@ -171,7 +171,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   sendBtn: {
-    backgroundColor: '#003366',
+    backgroundColor: '#C8102E',
     borderRadius: 15,
     width: 30,
     height: 30,
