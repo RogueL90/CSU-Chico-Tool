@@ -13,6 +13,8 @@ import {
   Linking,
   Alert,
   ActivityIndicator,
+  Animated,
+  Easing,
   LayoutAnimation,
   UIManager,
 } from 'react-native';
@@ -60,6 +62,163 @@ const ACCESSORY_TRANSITION = {
 
 function animateAccessoryTransition() {
   LayoutAnimation.configureNext(ACCESSORY_TRANSITION);
+}
+
+function ScalePressable({ style, children, onPress, onPressIn, onPressOut, ...props }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const animate = (toValue, spring = false) => {
+    const config = { toValue, useNativeDriver: true };
+    (spring
+      ? Animated.spring(scale, { ...config, speed: 28, bounciness: 4 })
+      : Animated.timing(scale, { ...config, duration: 90, easing: Easing.out(Easing.quad) })
+    ).start();
+  };
+
+  return (
+    <Animated.View style={{ transform: [{ scale }] }}>
+      <TouchableOpacity
+        {...props}
+        style={style}
+        onPress={onPress}
+        onPressIn={(event) => { animate(0.97); onPressIn?.(event); }}
+        onPressOut={(event) => { animate(1, true); onPressOut?.(event); }}
+      >
+        {children}
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+function TypingIndicator() {
+  const dots = useRef([0, 1, 2].map(() => new Animated.Value(0))).current;
+
+  useEffect(() => {
+    const animations = dots.map((dot, index) => Animated.loop(Animated.sequence([
+      Animated.delay(index * 120),
+      Animated.timing(dot, { toValue: 1, duration: 260, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(dot, { toValue: 0, duration: 260, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.delay((2 - index) * 120 + 180),
+    ])));
+    animations.forEach((animation) => animation.start());
+    return () => animations.forEach((animation) => animation.stop());
+  }, [dots]);
+
+  return (
+    <View style={styles.typingRow}>
+      <View style={styles.typingAvatar}><Text style={styles.typingPaw}>🐾</Text></View>
+      <View style={styles.typingBubble} accessibilityLabel="Willie is thinking">
+        {dots.map((dot, index) => (
+          <Animated.View
+            key={index}
+            style={[styles.typingDot, {
+              opacity: dot.interpolate({ inputRange: [0, 1], outputRange: [0.35, 1] }),
+              transform: [{ translateY: dot.interpolate({ inputRange: [0, 1], outputRange: [0, -5] }) }],
+            }]}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function AnimatedChoice({ choice, index, selected, onPress, disabled }) {
+  const entrance = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(entrance, {
+      toValue: 1,
+      delay: index * 50,
+      duration: 210,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [entrance, index]);
+
+  return (
+    <Animated.View style={[styles.choiceWrap, {
+      opacity: entrance,
+      transform: [{ translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }],
+    }]}>
+      <ScalePressable
+        style={[styles.chip, selected && styles.chipSelected]}
+        onPress={onPress}
+        disabled={disabled}
+        accessibilityRole="button"
+        accessibilityLabel={choice.label}
+      >
+        <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{choice.label}</Text>
+      </ScalePressable>
+    </Animated.View>
+  );
+}
+
+function FloatingCallCard({ phone, onCall }) {
+  const [displayedPhone, setDisplayedPhone] = useState(phone);
+  const [buttonPressed, setButtonPressed] = useState(false);
+  const entrance = useRef(new Animated.Value(0)).current;
+
+  const animateIn = useCallback(() => {
+    Animated.spring(entrance, {
+      toValue: 1,
+      speed: 20,
+      bounciness: 3,
+      useNativeDriver: true,
+    }).start();
+  }, [entrance]);
+
+  useEffect(() => {
+    if (phone?.number === displayedPhone?.number) return;
+
+    if (!displayedPhone && phone) {
+      setDisplayedPhone(phone);
+      entrance.setValue(0);
+      requestAnimationFrame(animateIn);
+      return;
+    }
+
+    Animated.timing(entrance, {
+      toValue: 0,
+      duration: 180,
+      easing: Easing.in(Easing.quad),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      setDisplayedPhone(phone);
+      if (phone) requestAnimationFrame(animateIn);
+    });
+  }, [phone, displayedPhone, entrance, animateIn]);
+
+  if (!displayedPhone) return null;
+
+  const formattedPhone = displayedPhone.number.replace(
+    /(\d{3})(\d{3})(\d{4})/, '($1) $2-$3'
+  );
+
+  return (
+    <Animated.View style={[styles.callCardWrap, {
+      opacity: entrance,
+      transform: [{ translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }],
+    }]}>
+      <ScalePressable
+        style={styles.callBar}
+        onPress={() => onCall(displayedPhone.number)}
+        onPressIn={() => setButtonPressed(true)}
+        onPressOut={() => setButtonPressed(false)}
+        activeOpacity={0.9}
+        accessibilityRole="button"
+        accessibilityLabel={`Call ${displayedPhone.label}`}
+      >
+        <View style={styles.callBarLeft}>
+          <View>
+            <Text style={styles.callBarLabel}>Call {displayedPhone.label}</Text>
+            <Text style={styles.callBarNumber}>{formattedPhone}</Text>
+          </View>
+        </View>
+        <View style={[styles.callBarBtn, buttonPressed && styles.callBarBtnPressed]}>
+          <Text style={styles.callBarBtnTxt}>Call</Text>
+        </View>
+      </ScalePressable>
+    </Animated.View>
+  );
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -110,6 +269,12 @@ export default function ChatScreen() {
   const [loading, setLoading] = useState(false);
   const [persistentPhone, setPersistentPhone] = useState(null);
   const [followUpChoices, setFollowUpChoices] = useState(null);
+  const [selectedChoiceId, setSelectedChoiceId] = useState(null);
+  const [showWelcome, setShowWelcome] = useState(true);
+  const welcomeAnim = useRef(new Animated.Value(1)).current;
+  const sendEnabledAnim = useRef(new Animated.Value(0)).current;
+  const restartAnim = useRef(new Animated.Value(0)).current;
+  const composerHeight = useRef(new Animated.Value(40)).current;
   const conversationRef = useRef([]);
   const locationRef = useRef(null);
 
@@ -122,6 +287,31 @@ export default function ChatScreen() {
   useEffect(() => {
     setMessages([{ id: uid(), role: 'bot', type: 'text', text: GREETING }]);
   }, []);
+
+  useEffect(() => {
+    Animated.spring(sendEnabledAnim, {
+      toValue: inputText.trim() && !loading ? 1 : 0,
+      speed: 26,
+      bounciness: 4,
+      useNativeDriver: true,
+    }).start();
+  }, [inputText, loading, sendEnabledAnim]);
+
+  const dismissWelcome = useCallback(() => {
+    if (!showWelcome) return;
+    Animated.parallel([
+      Animated.timing(welcomeAnim, { toValue: 0, duration: 200, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+    ]).start(() => {
+      setShowWelcome(false);
+      // Removing a large FlatList header changes the scroll offset. Correct it
+      // after React commits the removal so the first user message remains in
+      // view above Willie's typing indicator.
+      requestAnimationFrame(() => {
+        listRef.current?.scrollToEnd({ animated: false });
+        setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
+      });
+    });
+  }, [showWelcome, welcomeAnim]);
 
   // ── Request location permission early and warm the GPS fix ────────────────
   useEffect(() => {
@@ -181,6 +371,7 @@ export default function ChatScreen() {
 
   // ── Send a message to the backend ─────────────────────────────────────────
   const sendQuery = useCallback(async (userText) => {
+    dismissWelcome();
     const userMsg = { id: uid(), role: 'user', type: 'text', text: userText };
     pushMessages([userMsg]);
     if (followUpChoices) animateAccessoryTransition();
@@ -214,7 +405,7 @@ export default function ChatScreen() {
     } finally {
       setLoading(false);
     }
-  }, [pushMessages, handleBackendResponse, followUpChoices]);
+  }, [pushMessages, handleBackendResponse, followUpChoices, dismissWelcome]);
 
   // ── Handle bottom-bar send ────────────────────────────────────────────────
   const handleSend = useCallback(() => {
@@ -228,28 +419,48 @@ export default function ChatScreen() {
   // ── Handle follow-up chip press ───────────────────────────────────────────
   const handleChip = useCallback((choice) => {
     if (loading) return;
-    animateAccessoryTransition();
-    setFollowUpChoices(null);
-    sendQuery(choice.label);
+    setSelectedChoiceId(choice.id);
+    setTimeout(() => {
+      animateAccessoryTransition();
+      setFollowUpChoices(null);
+      setSelectedChoiceId(null);
+      sendQuery(choice.label);
+    }, 130);
   }, [loading, sendQuery]);
 
   // ── Restart ───────────────────────────────────────────────────────────────
   const handleRestart = useCallback(() => {
+    restartAnim.setValue(0);
+    Animated.timing(restartAnim, {
+      toValue: 1,
+      duration: 320,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
     _id = 0;
     animateAccessoryTransition();
     setPersistentPhone(null);
     setFollowUpChoices(null);
     setInputText('');
     setLoading(false);
+    composerHeight.setValue(40);
+    setShowWelcome(true);
+    welcomeAnim.setValue(1);
     conversationRef.current = [];
     setMessages([{ id: uid(), role: 'bot', type: 'text', text: GREETING }]);
-  }, []);
+  }, [welcomeAnim, restartAnim, composerHeight]);
+
+  const handleComposerSizeChange = useCallback((event) => {
+    const nextHeight = Math.min(96, Math.max(40, event.nativeEvent.contentSize.height + 2));
+    Animated.timing(composerHeight, {
+      toValue: nextHeight,
+      duration: 160,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [composerHeight]);
 
   // ── Render ────────────────────────────────────────────────────────────────
-  const formattedPhone = persistentPhone?.number.replace(
-    /(\d{3})(\d{3})(\d{4})/, '($1) $2-$3'
-  );
-
   return (
     <SafeAreaView style={styles.safe}>
       {/* ── Header ── */}
@@ -263,15 +474,19 @@ export default function ChatScreen() {
             <Text style={styles.headerTitle}>Call Willie</Text>
           </View>
         </View>
-        <TouchableOpacity
-          style={styles.restartBtn}
-          onPress={handleRestart}
-          accessibilityRole="button"
-          accessibilityLabel="Start over"
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Text style={styles.restartTxt}>↺</Text>
-        </TouchableOpacity>
+        <Animated.View style={{
+          transform: [{ rotate: restartAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '300deg'] }) }],
+        }}>
+          <TouchableOpacity
+            style={styles.restartBtn}
+            onPress={handleRestart}
+            accessibilityRole="button"
+            accessibilityLabel="Start over"
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Text style={styles.restartTxt}>↺</Text>
+          </TouchableOpacity>
+        </Animated.View>
       </View>
 
       <KeyboardAvoidingView
@@ -286,8 +501,14 @@ export default function ChatScreen() {
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => <MessageBubble message={item} />}
           contentContainerStyle={styles.listContent}
-          ListHeaderComponent={(
-            <View style={styles.welcomeCard}>
+          ListHeaderComponent={showWelcome ? (
+            <Animated.View style={[styles.welcomeCard, {
+              opacity: welcomeAnim,
+              transform: [
+                { scale: welcomeAnim.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) },
+                { translateY: welcomeAnim.interpolate({ inputRange: [0, 1], outputRange: [-6, 0] }) },
+              ],
+            }]}>
               <View style={styles.cardHeadingRow}>
                 <Text style={styles.cardTitle}>Your Helper Willie</Text>
               </View>
@@ -296,7 +517,7 @@ export default function ChatScreen() {
               </Text>
               <View style={styles.starterRow}>
                 {STARTER_QUESTIONS.map((question) => (
-                  <TouchableOpacity
+                  <ScalePressable
                     key={question}
                     style={styles.starterChip}
                     onPress={() => sendQuery(question)}
@@ -305,11 +526,12 @@ export default function ChatScreen() {
                     accessibilityLabel={`Ask Willie about ${question}`}
                   >
                     <Text style={styles.starterChipText}>{question}</Text>
-                  </TouchableOpacity>
+                  </ScalePressable>
                 ))}
               </View>
-            </View>
-          )}
+            </Animated.View>
+          ) : null}
+          ListFooterComponent={loading ? <TypingIndicator /> : null}
           onContentSizeChange={() =>
             listRef.current?.scrollToEnd({ animated: true })
           }
@@ -317,78 +539,60 @@ export default function ChatScreen() {
           showsVerticalScrollIndicator={false}
         />
 
-        {/* ── Typing indicator ── */}
-        {loading && (
-          <View style={styles.typingBar}>
-            <ActivityIndicator size="small" color="#C8102E" />
-            <Text style={styles.typingText}>Willie is thinking…</Text>
-          </View>
-        )}
-
         {/* ── Persistent call bar ── */}
-        {persistentPhone && (
-          <TouchableOpacity
-            style={styles.callBar}
-            onPress={() => dialNumber(persistentPhone.number)}
-            activeOpacity={0.82}
-            accessibilityRole="button"
-            accessibilityLabel={`Call ${persistentPhone.label}`}
-          >
-            <View style={styles.callBarLeft}>
-              <Text style={styles.callBarIcon}>📞</Text>
-              <View>
-                <Text style={styles.callBarLabel}>Call {persistentPhone.label}</Text>
-                <Text style={styles.callBarNumber}>{formattedPhone}</Text>
-              </View>
-            </View>
-            <View style={styles.callBarBtn}>
-              <Text style={styles.callBarBtnTxt}>Call</Text>
-            </View>
-          </TouchableOpacity>
-        )}
+        <FloatingCallCard phone={persistentPhone} onCall={dialNumber} />
 
         {/* ── Follow-up choice chips (confidence < 80) ── */}
         {followUpChoices && (
           <View style={styles.chipsBar}>
             {followUpChoices.map((choice) => (
-              <TouchableOpacity
+              <AnimatedChoice
                 key={choice.id}
-                style={styles.chip}
+                choice={choice}
+                index={followUpChoices.indexOf(choice)}
+                selected={selectedChoiceId === choice.id}
                 onPress={() => handleChip(choice)}
-                activeOpacity={0.78}
                 disabled={loading}
-                accessibilityRole="button"
-                accessibilityLabel={choice.label}
-              >
-                <Text style={styles.chipText}>{choice.label}</Text>
-              </TouchableOpacity>
+              />
             ))}
           </View>
         )}
 
         {/* ── Input bar — always visible ── */}
         <View style={styles.inputBar}>
+          <Animated.View style={[styles.inputWrap, { height: composerHeight }]}>
           <TextInput
             style={styles.input}
             value={inputText}
             onChangeText={setInputText}
+            onContentSizeChange={handleComposerSizeChange}
             placeholder={followUpChoices ? 'Other…' : 'Call Willie for help…'}
             placeholderTextColor="#8D7C7F"
             returnKeyType="send"
             onSubmitEditing={handleSend}
-            blurOnSubmit={false}
+            multiline
+            submitBehavior="submit"
+            textAlignVertical="center"
             editable={!loading}
             accessibilityLabel="Type your question"
           />
-          <TouchableOpacity
+          </Animated.View>
+          <ScalePressable
             style={[styles.sendBtn, (!inputText.trim() || loading) && styles.sendBtnDisabled]}
             onPress={handleSend}
             disabled={!inputText.trim() || loading}
             accessibilityRole="button"
             accessibilityLabel="Send message"
           >
-            <Text style={styles.sendTxt}>Send</Text>
-          </TouchableOpacity>
+            {loading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Animated.Text style={[styles.sendTxt, {
+                opacity: sendEnabledAnim,
+                transform: [{ scale: sendEnabledAnim.interpolate({ inputRange: [0, 1], outputRange: [0.65, 1] }) }],
+              }]}>↑</Animated.Text>
+            )}
+          </ScalePressable>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -433,38 +637,43 @@ const styles = StyleSheet.create({
   starterChipText: { color: '#8B0A22', fontSize: 12, fontWeight: '700' },
 
   // Typing indicator
-  typingBar: {
+  typingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 18,
-    paddingVertical: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     gap: 8,
   },
-  typingText: { fontSize: 13, color: '#725E62', fontStyle: 'italic' },
+  typingAvatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#fff', borderWidth: 1, borderColor: '#F0DDDE', alignItems: 'center', justifyContent: 'center' },
+  typingPaw: { fontSize: 14 },
+  typingBubble: { height: 34, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 13, backgroundColor: '#fff', borderWidth: 1, borderColor: '#F0DDDE', borderRadius: 17, borderBottomLeftRadius: 5 },
+  typingDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#C8102E' },
 
-  // Persistent call bar
+  // Floating persistent call card
+  callCardWrap: { marginHorizontal: 12, marginBottom: 4, shadowColor: '#4A0010', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.2, shadowRadius: 14, elevation: 6 },
   callBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#7A0019',
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderTopWidth: 1,
-    borderTopColor: '#5B0013',
+    backgroundColor: '#C8102E',
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: '#A90D27',
   },
   callBarLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
-  callBarIcon: { fontSize: 20 },
-  callBarLabel: { color: '#fff', fontSize: 13, fontWeight: '700' },
-  callBarNumber: { color: 'rgba(255,255,255,0.75)', fontSize: 12, marginTop: 1 },
+  callBarLabel: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
+  callBarNumber: { color: 'rgba(255,255,255,0.82)', fontSize: 12, marginTop: 1 },
   callBarBtn: {
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderRadius: 8,
-    paddingVertical: 6,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 11,
+    paddingVertical: 8,
     paddingHorizontal: 16,
     marginLeft: 10,
   },
-  callBarBtnTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  callBarBtnPressed: { backgroundColor: '#FFE5E9' },
+  callBarBtnTxt: { color: '#C8102E', fontSize: 13, fontWeight: '800' },
 
   // Follow-up choice chips
   chipsBar: {
@@ -477,8 +686,9 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     gap: 8,
   },
+  choiceWrap: { flex: 1 },
   chip: {
-    flex: 1,
+    width: '100%',
     backgroundColor: '#FFF0F1',
     borderRadius: 20,
     paddingVertical: 10,
@@ -488,6 +698,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   chipText: { fontSize: 13, color: '#8B0A22', fontWeight: '600', textAlign: 'center' },
+  chipSelected: { backgroundColor: '#C8102E', borderColor: '#C8102E' },
+  chipTextSelected: { color: '#fff' },
 
   // Input bar
   inputBar: {
@@ -500,14 +712,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF9F6',
     gap: 8,
   },
-  input: {
+  inputWrap: {
     flex: 1,
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: '#E8D8D8',
     borderRadius: 22,
+    overflow: 'hidden',
+  },
+  input: {
+    flex: 1,
     paddingHorizontal: 16,
-    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+    paddingVertical: Platform.OS === 'ios' ? 9 : 7,
     fontSize: 15,
     color: '#2C2022',
   },
@@ -520,5 +736,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sendBtnDisabled: { backgroundColor: '#D9AEB5' },
-  sendTxt: { color: '#fff', fontSize: 13, fontWeight: '800' },
+  sendTxt: { color: '#fff', fontSize: 24, lineHeight: 26, fontWeight: '700' },
 });

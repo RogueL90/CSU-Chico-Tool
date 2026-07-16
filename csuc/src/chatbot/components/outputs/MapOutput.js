@@ -81,6 +81,7 @@ export default function MapOutput({ map }) {
   // which one the user has selected.
   const [routes, setRoutes] = useState([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
+  const [selectedRouteWidth, setSelectedRouteWidth] = useState(5);
   const [fetching, setFetching] = useState(false);
   const [routeError, setRouteError] = useState(false);
   // Route origin: updated only after real movement so we don't re-fetch
@@ -102,6 +103,7 @@ export default function MapOutput({ map }) {
   const hasFitRef = useRef(false);
   const mapRef = useRef(null);
   const sheetTranslateY = useRef(new Animated.Value(SHEET_H)).current;
+  const mapTransition = useRef(new Animated.Value(0)).current;
   // Which snap point the sheet is resting at: 'collapsed' | 'expanded'
   const snapRef = useRef('collapsed');
 
@@ -122,7 +124,37 @@ export default function MapOutput({ map }) {
     sheetTranslateY.setValue(SHEET_H);
   };
 
-  const closeMap = () => snapTo(SHEET_H, finishClosingMap);
+  const closeMap = () => {
+    Animated.parallel([
+      Animated.timing(sheetTranslateY, {
+        toValue: SHEET_H,
+        duration: 190,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(mapTransition, {
+        toValue: 0,
+        duration: 190,
+        easing: Easing.inOut(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (finished) finishClosingMap();
+    });
+  };
+
+  const openMap = () => {
+    mapTransition.setValue(0);
+    setExpanded(true);
+    requestAnimationFrame(() => {
+      Animated.spring(mapTransition, {
+        toValue: 1,
+        speed: 22,
+        bounciness: 2,
+        useNativeDriver: true,
+      }).start();
+    });
+  };
 
   // Drag between snap points: collapsed <-> expanded, or down to dismiss.
   const sheetPanResponder = useRef(
@@ -307,6 +339,13 @@ export default function MapOutput({ map }) {
     }
   }, [navMode, liveLoc, heading, followSuspended, routes, selectedIdx, navStepIdx, lat, lng, mode]);
 
+  useEffect(() => {
+    if (!routes[selectedIdx]) return undefined;
+    setSelectedRouteWidth(7);
+    const settle = setTimeout(() => setSelectedRouteWidth(5), 220);
+    return () => clearTimeout(settle);
+  }, [routes, selectedIdx]);
+
   if (!validCoords) return null;
 
   const selectedRoute = routes[selectedIdx] || null;
@@ -376,7 +415,7 @@ export default function MapOutput({ map }) {
       {/* ── Mini map card (non-interactive, tappable) ── */}
       <TouchableOpacity
         style={styles.miniCard}
-        onPress={() => setExpanded(true)}
+        onPress={openMap}
         activeOpacity={0.9}
         accessibilityRole="button"
         accessibilityLabel={`Expand map: ${label}`}
@@ -416,11 +455,16 @@ export default function MapOutput({ map }) {
       {/* ── Full-screen modal ── */}
       <Modal
         visible={expanded}
-        animationType="fade"
-        onRequestClose={() => setExpanded(false)}
+        animationType="none"
+        onRequestClose={closeMap}
         statusBarTranslucent
       >
         <StatusBar barStyle="dark-content" />
+
+        <Animated.View style={[styles.modalScene, {
+          opacity: mapTransition,
+          transform: [{ scale: mapTransition.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) }],
+        }]}>
 
         {/* Map fills the entire screen */}
         <MapView
@@ -477,7 +521,7 @@ export default function MapOutput({ map }) {
             <Polyline
               coordinates={selectedRoute.coordinates}
               strokeColor="#C8102E"
-              strokeWidth={5}
+              strokeWidth={selectedRouteWidth}
               zIndex={2}
             />
           )}
@@ -655,12 +699,14 @@ export default function MapOutput({ map }) {
           {/* Turn-by-turn list — below the fold until the sheet is dragged up */}
           <StepsList steps={selectedRoute?.steps} />
         </Animated.View>
+        </Animated.View>
       </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  modalScene: { flex: 1, backgroundColor: '#F4F4F6' },
   wrapper: {
     marginTop: 8,
   },
@@ -893,13 +939,13 @@ const styles = StyleSheet.create({
   },
   backBtn: {
     flex: 1,
-    backgroundColor: '#F5F5F7',
+    backgroundColor: '#C8102E',
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
   },
   backBtnText: {
-    color: '#C8102E',
+    color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '700',
   },

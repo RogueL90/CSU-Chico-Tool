@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
 import TextOutput from './outputs/TextOutput';
 import MapOutput from './outputs/MapOutput';
 import BotMarkdown from './BotMarkdown';
@@ -22,20 +22,63 @@ import BotMarkdown from './BotMarkdown';
  * Neither belongs inside a message bubble.
  */
 export default function MessageBubble({ message }) {
+  const entrance = useRef(new Animated.Value(0)).current;
+  const successPulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.timing(entrance, {
+      toValue: 1,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+
+    if (message.type === 'result') {
+      Animated.sequence([
+        Animated.delay(170),
+        Animated.timing(successPulse, {
+          toValue: 1.018,
+          duration: 110,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.spring(successPulse, {
+          toValue: 1,
+          speed: 24,
+          bounciness: 3,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [entrance, successPulse, message.type]);
+
+  const entranceStyle = {
+    opacity: entrance,
+    transform: [{
+      translateX: message.role === 'user'
+        ? entrance.interpolate({ inputRange: [0, 1], outputRange: [10, 0] })
+        : 0,
+    }, {
+      translateY: message.role === 'bot'
+        ? entrance.interpolate({ inputRange: [0, 1], outputRange: [8, 0] })
+        : 0,
+    }, { scale: successPulse }],
+  };
+
   // ── User bubble ───────────────────────────────────────────────────────────
   if (message.role === 'user') {
     return (
-      <View style={styles.userRow}>
+      <Animated.View style={[styles.userRow, entranceStyle]}>
         <View style={styles.userBubble}>
           <Text style={styles.userText}>{message.text}</Text>
         </View>
-      </View>
+      </Animated.View>
     );
   }
 
   // ── Bot message ───────────────────────────────────────────────────────────
   return (
-    <View style={styles.botRow}>
+    <Animated.View style={[styles.botRow, entranceStyle]}>
       <View style={styles.avatar}>
         <Text style={styles.avatarEmoji}>🐾</Text>
       </View>
@@ -56,7 +99,7 @@ export default function MessageBubble({ message }) {
           </View>
         )}
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
