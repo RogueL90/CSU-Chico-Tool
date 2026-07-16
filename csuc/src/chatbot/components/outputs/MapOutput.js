@@ -11,6 +11,7 @@ import {
   SafeAreaView,
   StatusBar,
   ActivityIndicator,
+  PanResponder,
 } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
@@ -29,8 +30,8 @@ const MINI_DELTA = 0.004;
 const FULL_DELTA = 0.003;
 
 const MODES = [
-  { key: 'WALKING', icon: '🚶', label: 'Walk' },
-  { key: 'DRIVING', icon: '🚗', label: 'Drive' },
+  { key: 'WALKING', label: 'Walk' },
+  { key: 'DRIVING', label: 'Drive' },
 ];
 
 /**
@@ -189,6 +190,28 @@ export default function MapOutput({ map }) {
   };
 
   const routing = userLoc && !eta;
+
+  // Swipe-down-to-dismiss on the bottom sheet.
+  // Only claims the gesture on a clear downward drag so button taps still work.
+  const sheetPanResponder = PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_, g) =>
+      g.dy > 8 && Math.abs(g.dy) > Math.abs(g.dx),
+    onPanResponderRelease: (_, g) => handleSheetSwipeRelease(g),
+  });
+
+  // TODO(you): decide when a swipe should close the map and return to chat.
+  // Available on `g`:
+  //   g.dy — total pixels moved down (positive = downward)
+  //   g.vy — velocity in px/ms      (positive = downward)
+  // Call setExpanded(false) to dismiss the modal.
+  //
+  // Consider the trade-off: distance-only feels predictable but requires a
+  // big drag; velocity-based lets a quick flick dismiss (Apple-style) but
+  // can trigger accidentally. A combined threshold is usually the sweet spot.
+  function handleSheetSwipeRelease(g) {
+    if (g.dy > 80 || g.vy > 0.5) setExpanded(false);
+  }
 
   return (
     <View style={styles.wrapper}>
@@ -386,7 +409,7 @@ export default function MapOutput({ map }) {
                     mode === m.key && styles.segmentTextActive,
                   ]}
                 >
-                  {m.icon}  {m.label}
+                  {m.label}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -600,32 +623,36 @@ const styles = StyleSheet.create({
 
   segment: {
     flexDirection: 'row',
-    backgroundColor: '#F2F2F7',
-    borderRadius: 12,
-    padding: 3,
-    marginTop: 14,
+    gap: 10,
+    marginTop: 16,
   },
   segmentBtn: {
     flex: 1,
-    paddingVertical: 8,
-    borderRadius: 10,
+    paddingVertical: 12,
+    borderRadius: 14,
     alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F5F5F7',
+    borderWidth: 1,
+    borderColor: 'transparent',
   },
   segmentBtnActive: {
-    backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
+    backgroundColor: '#C8102E',
+    borderColor: '#C8102E',
+    shadowColor: '#C8102E',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
   },
   segmentText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#8A8A8E',
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#3A3A3C',
+    letterSpacing: 0.2,
   },
   segmentTextActive: {
-    color: '#1a1a1a',
+    color: '#fff',
   },
 
   etaRow: {

@@ -35,7 +35,7 @@ function resolveBackendUrl() {
 }
 const BACKEND_URL = resolveBackendUrl();
 const GREETING = "I'm Willie, and I'm here to help you find the right campus office or service and point you in the right direction.";
-const STARTER_QUESTIONS = ['Add/drop date', 'Advising', 'Dining hours'];
+const STARTER_QUESTIONS = ['Add/drop date', 'Advising', 'Dining hall'];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 let _id = 0;
