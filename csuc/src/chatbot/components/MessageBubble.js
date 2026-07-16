@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import TextOutput from './outputs/TextOutput';
 import MapOutput from './outputs/MapOutput';
+import BotMarkdown from './BotMarkdown';
 
 /**
  * Renders a single chat message.
@@ -41,7 +42,7 @@ export default function MessageBubble({ message }) {
       <View style={styles.botContent}>
         {!!message.text && (
           <View style={styles.botBubble}>
-            <Text style={styles.botText}>{message.text}</Text>
+            <BotMarkdown text={message.text} />
           </View>
         )}
         {message.type === 'result' && message.outputs && message.outputTypes && (

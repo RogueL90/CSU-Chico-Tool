@@ -10,7 +10,7 @@ import {
   StatusBar,
   ActivityIndicator,
 } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { watchLocation, watchHeading, distanceMeters } from '../../../../maps-api/location';
 
@@ -147,6 +147,7 @@ export default function MapOutput({ map }) {
         accessibilityLabel={`Expand map: ${label}`}
       >
         <MapView
+          provider={PROVIDER_GOOGLE}
           style={{ width: MINI_W, height: MINI_H }}
           region={miniRegion}
           scrollEnabled={false}
@@ -189,6 +190,7 @@ export default function MapOutput({ map }) {
         {/* Map fills the entire screen */}
         <MapView
           ref={mapRef}
+          provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFill}
           initialRegion={fullRegion}
           scrollEnabled
