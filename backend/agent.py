@@ -9,6 +9,8 @@ decision are normalized in Python after the model responds.
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 
 import boto3
 from strands import Agent
@@ -90,6 +92,7 @@ RULES:
 - The text field must ONLY contain the student-facing answer. NEVER mention tools, tool names, internal decisions, JSON, workflows, KB retrieval, or anything about how you work internally. The student should have no idea tools exist.
 - Keep answers concise and student-friendly.
 - Format "text" with simple markdown when it improves readability: **bold** for key facts (names, deadlines, room numbers, phone numbers), "-" bullet lists when listing multiple items, and [title](url) for links. No headings or tables. The text lives inside a JSON string, so escape newlines as \\n.
+- Only include a URL if it appears character-for-character in the tool results (in the passage text or a "Source:" line). NEVER write a URL from memory — a wrong link is worse than no link. If the results contain no relevant URL, leave it out.
 - ALWAYS use lookup_place if your answer mentions ANY campus building, office, or location — even if the user didn't explicitly ask "where."
 - ALWAYS try to include the number if the KB answer contains ANY phone number — even if the user didn't explicitly ask for a number.
 - Be PROACTIVE: if the topic is even slightly related to safety, health, or emergencies, include the relevant phone number (campus police, wellness center, etc.) as an output type phone, even if the user didn't ask for it. For example, if someone mentions stress, mental health, feeling overwhelmed, or being hurt, include the Wellness Center or Counseling number. If someone mentions feeling unsafe, include University Police.
@@ -246,9 +249,79 @@ def normalize_choices(raw_choices) -> list[dict] | None:
     ]
 
 
+MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+BARE_URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s)\]}>\"']+")
+
+
+def _url_is_live(url: str, timeout: float = 4.0) -> bool:
+    """HEAD the URL (GET fallback); follows redirects. Network errors count
+    as live so a transient blip doesn't strip a good link."""
+    headers = {"User-Agent": "Mozilla/5.0 (CallWillie link check)"}
+    for method in ("HEAD", "GET"):
+        try:
+            request = urllib.request.Request(url, method=method, headers=headers)
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.status < 400
+        except urllib.error.HTTPError as error:
+            # Some servers reject HEAD outright — retry with GET.
+            if method == "HEAD" and error.code in (403, 405, 501):
+                continue
+            return error.code < 400
+        except Exception:
+            return True
+    return True
+
+
+def strip_dead_links(text: str | None) -> str | None:
+    """Remove URLs from the answer that don't resolve (the model sometimes
+    writes plausible-looking links from memory). Markdown links degrade to
+    their title text; bare URLs are cut out."""
+    if not text or ("http" not in text and "www." not in text):
+        return text
+
+    live_cache: dict[str, bool] = {}
+
+    def is_live(url: str) -> bool:
+        cleaned = url.rstrip(".,;:!?*")
+        if cleaned.startswith("www."):
+            cleaned = f"https://{cleaned}"
+        if cleaned not in live_cache:
+            # Cap the number of checks so a link-heavy answer can't stall.
+            live_cache[cleaned] = (
+                True if len(live_cache) >= 5 else _url_is_live(cleaned)
+            )
+        return live_cache[cleaned]
+
+    def replace_markdown(match):
+        title, url = match.group(1), match.group(2)
+        return match.group(0) if is_live(url) else title
+
+    result = MARKDOWN_LINK_PATTERN.sub(replace_markdown, text)
+
+    def replace_bare(match):
+        url = match.group(0)
+        trailing = url[len(url.rstrip(".,;:!?*")):]
+        return url if is_live(url) else trailing
+
+    # Only bare URLs remain (dead markdown links were already reduced to text).
+    result = re.sub(
+        r"(?<!\]\()" + BARE_URL_PATTERN.pattern,
+        replace_bare,
+        result,
+    )
+
+    if result != text:
+        result = re.sub(r"\*\*\s*\*\*", "", result)  # emptied bold
+        result = re.sub(r"[ \t]+([.,;:!?])", r"\1", result)
+        result = re.sub(r"[ \t]{2,}", " ", result)
+    return result.strip()
+
+
 def sanitize_response(parsed: dict) -> dict:
     """Normalize model JSON into the existing Expo/FastAPI response contract."""
-    text = strip_reflection_tags(parsed.get("text") or parsed.get("answerText"))
+    text = strip_dead_links(
+        strip_reflection_tags(parsed.get("text") or parsed.get("answerText"))
+    )
 
     map_data = parsed.get("map")
     phone_candidate = parsed.get("phone")
@@ -355,7 +428,7 @@ async def process_query(
         return sanitize_response(parsed)
 
     # Parsing failures should never expose raw JSON or generic follow-up chips.
-    clean_text = strip_reflection_tags(response_text)
+    clean_text = strip_dead_links(strip_reflection_tags(response_text))
     if not clean_text or clean_text.lstrip().startswith("{"):
         clean_text = "I found information, but I couldn't format the response. Please try again."
     phone = extract_phone(clean_text)

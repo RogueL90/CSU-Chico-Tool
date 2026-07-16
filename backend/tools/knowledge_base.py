@@ -48,8 +48,18 @@ def retrieve_from_kb(query: str) -> str:
         passages = []
         for i, result in enumerate(results):
             text = result.get("content", {}).get("text", "").strip()
-            if text:
-                passages.append(f"[{i + 1}] {text}")
+            if not text:
+                continue
+            # Source page of the chunk — gives the model a real URL to cite
+            # instead of reconstructing one from memory.
+            source = (
+                result.get("location", {}).get("webLocation", {}).get("url")
+                or result.get("metadata", {}).get("x-amz-bedrock-kb-source-uri")
+            )
+            passage = f"[{i + 1}] {text}"
+            if source:
+                passage += f"\n(Source: {source})"
+            passages.append(passage)
 
         if not passages:
             return "No relevant information found in the knowledge base."
