@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { Animated, View, Text, StyleSheet } from 'react-native';
 import TextOutput from './outputs/TextOutput';
 import MapOutput from './outputs/MapOutput';
 
@@ -21,20 +21,50 @@ import MapOutput from './outputs/MapOutput';
  * Neither belongs inside a message bubble.
  */
 export default function MessageBubble({ message }) {
+  const entrance = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.spring(entrance, {
+      toValue: 1,
+      damping: 18,
+      stiffness: 170,
+      mass: 0.75,
+      useNativeDriver: true,
+    }).start();
+  }, [entrance]);
+
+  const entranceStyle = {
+    opacity: entrance,
+    transform: [
+      {
+        translateY: entrance.interpolate({
+          inputRange: [0, 1],
+          outputRange: [12, 0],
+        }),
+      },
+      {
+        scale: entrance.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0.98, 1],
+        }),
+      },
+    ],
+  };
+
   // ── User bubble ───────────────────────────────────────────────────────────
   if (message.role === 'user') {
     return (
-      <View style={styles.userRow}>
+      <Animated.View style={[styles.userRow, entranceStyle]}>
         <View style={styles.userBubble}>
           <Text style={styles.userText}>{message.text}</Text>
         </View>
-      </View>
+      </Animated.View>
     );
   }
 
   // ── Bot message ───────────────────────────────────────────────────────────
   return (
-    <View style={styles.botRow}>
+    <Animated.View style={[styles.botRow, entranceStyle]}>
       <View style={styles.avatar}>
         <Text style={styles.avatarEmoji}>🐾</Text>
       </View>
@@ -55,7 +85,7 @@ export default function MessageBubble({ message }) {
           </View>
         )}
       </View>
-    </View>
+    </Animated.View>
   );
 }
 

@@ -3,6 +3,8 @@ import {
   View,
   Text,
   TouchableOpacity,
+  Animated,
+  PanResponder,
   Modal,
   StyleSheet,
   Dimensions,
@@ -69,6 +71,49 @@ export default function MapOutput({ map }) {
   const userLocRef = useRef(null);
   const hasFitRef = useRef(false);
   const mapRef = useRef(null);
+  const sheetTranslateY = useRef(new Animated.Value(260)).current;
+
+  const finishClosingMap = () => {
+    setExpanded(false);
+    sheetTranslateY.setValue(260);
+  };
+
+  const animateBackToChat = () => {
+    Animated.timing(sheetTranslateY, {
+      toValue: -420,
+      duration: 230,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) finishClosingMap();
+    });
+  };
+
+  const snapSheetBack = () => {
+    Animated.spring(sheetTranslateY, {
+      toValue: 0,
+      damping: 20,
+      stiffness: 220,
+      mass: 0.8,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const sheetPanResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gesture) =>
+        Math.abs(gesture.dy) > 5 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
+      onPanResponderMove: (_, gesture) => {
+        // This handle intentionally follows upward movement only. A downward
+        // drag gets a little resistance, then springs back into place.
+        sheetTranslateY.setValue(gesture.dy < 0 ? gesture.dy : gesture.dy * 0.12);
+      },
+      onPanResponderRelease: (_, gesture) => {
+        if (gesture.dy < -55 || gesture.vy < -0.65) animateBackToChat();
+        else snapSheetBack();
+      },
+      onPanResponderTerminate: snapSheetBack,
+    })
+  ).current;
 
   // Track position + compass at navigation accuracy while the map is open
   useEffect(() => {
@@ -77,6 +122,15 @@ export default function MapOutput({ map }) {
       setRouteError(false);
       return;
     }
+
+    sheetTranslateY.setValue(260);
+    Animated.spring(sheetTranslateY, {
+      toValue: 0,
+      damping: 19,
+      stiffness: 180,
+      mass: 0.85,
+      useNativeDriver: true,
+    }).start();
 
     let stopPos = null;
     let stopHeading = null;
@@ -180,7 +234,7 @@ export default function MapOutput({ map }) {
       {/* ── Full-screen modal ── */}
       <Modal
         visible={expanded}
-        animationType="slide"
+        animationType="fade"
         onRequestClose={() => setExpanded(false)}
         statusBarTranslucent
       >
@@ -289,8 +343,20 @@ export default function MapOutput({ map }) {
         </SafeAreaView>
 
         {/* ── Bottom sheet ── */}
-        <View style={styles.sheet}>
-          <View style={styles.grabber} />
+        <Animated.View
+          style={[styles.sheet, { transform: [{ translateY: sheetTranslateY }] }]}
+        >
+          <View
+            style={styles.grabberTouchArea}
+            {...sheetPanResponder.panHandlers}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel="Swipe up to return to chat"
+            accessibilityHint="Drag this handle upward to close the map"
+          >
+            <View style={styles.grabber} />
+            <Text style={styles.swipeHint}>Swipe up for chat</Text>
+          </View>
 
           {/* Destination */}
           <Text style={styles.sheetTitle} numberOfLines={1}>{label}</Text>
@@ -348,14 +414,14 @@ export default function MapOutput({ map }) {
           {/* Back to chat */}
           <TouchableOpacity
             style={styles.backBtn}
-            onPress={() => setExpanded(false)}
+            onPress={animateBackToChat}
             activeOpacity={0.85}
             accessibilityRole="button"
             accessibilityLabel="Back to chat"
           >
             <Text style={styles.backBtnText}>Back to Chat</Text>
           </TouchableOpacity>
-        </View>
+        </Animated.View>
       </Modal>
     </View>
   );
@@ -501,12 +567,24 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   grabber: {
-    alignSelf: 'center',
     width: 40,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#E5E5EA',
-    marginBottom: 12,
+    backgroundColor: '#C7C7CC',
+  },
+  grabberTouchArea: {
+    minHeight: 36,
+    marginTop: -6,
+    marginBottom: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  swipeHint: {
+    color: '#8A8A8E',
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 5,
+    letterSpacing: 0.2,
   },
   sheetTitle: {
     fontSize: 19,
