@@ -16,6 +16,19 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { watchLocation, watchHeading, distanceMeters } from '../../../../maps-api/location';
 import { getRoutes } from '../../../../maps-api/directions';
 import StepsList from './map/StepsList';
+import NavBanner from './map/NavBanner';
+
+// Navigation-mode tuning
+const STEP_ADVANCE_METERS = 15; // reached the maneuver point
+const OFF_ROUTE_METERS = 50; // this far from the route line...
+const OFF_ROUTE_FIXES = 2; // ...for this many consecutive fixes -> re-route
+const CAMERA_THROTTLE_MS = 900;
+
+function metersToDisplay(m) {
+  const feet = m * 3.28084;
+  if (feet < 1000) return `${Math.max(10, Math.round(feet / 10) * 10)} ft`;
+  return `${(m / 1609.344).toFixed(1)} mi`;
+}
 
 // Re-fetch the route once the user has moved this far from its origin.
 const REROUTE_THRESHOLD_METERS = 30;
@@ -77,6 +90,14 @@ export default function MapOutput({ map }) {
   // user marker (blue dot with direction cone).
   const [liveLoc, setLiveLoc] = useState(null);
   const [heading, setHeading] = useState(0);
+  // Live navigation mode
+  const [navMode, setNavMode] = useState(false);
+  const [navStepIdx, setNavStepIdx] = useState(0);
+  const [followSuspended, setFollowSuspended] = useState(false);
+  const lastCameraRef = useRef(0);
+  const offRouteCountRef = useRef(0);
+  const reroutingRef = useRef(false);
+
   const userLocRef = useRef(null);
   const hasFitRef = useRef(false);
   const mapRef = useRef(null);
@@ -147,6 +168,9 @@ export default function MapOutput({ map }) {
       setRoutes([]);
       setSelectedIdx(0);
       setRouteError(false);
+      setNavMode(false);
+      setNavStepIdx(0);
+      setFollowSuspended(false);
       return;
     }
 
@@ -195,9 +219,10 @@ export default function MapOutput({ map }) {
   const lng = Number(map.lng);
   const validCoords = Number.isFinite(lat) && Number.isFinite(lng);
 
-  // Fetch routes (with alternates) whenever the origin or mode changes
+  // Fetch routes (with alternates) whenever the origin or mode changes.
+  // Suspended during navigation — the off-route logic below owns re-routing.
   useEffect(() => {
-    if (!expanded || !userLoc || !validCoords) return;
+    if (!expanded || !userLoc || !validCoords || navMode) return;
     let stale = false;
     setFetching(true);
 
@@ -225,7 +250,64 @@ export default function MapOutput({ map }) {
     return () => {
       stale = true;
     };
-  }, [expanded, userLoc, mode, lat, lng, validCoords]);
+  }, [expanded, userLoc, mode, lat, lng, validCoords, navMode]);
+
+  // Navigation mode: camera follow, step progression, off-route re-routing
+  useEffect(() => {
+    if (!navMode || !liveLoc) return;
+    const route = routes[selectedIdx];
+    if (!route) return;
+
+    // Heading-up camera follow, throttled so animations don't pile up
+    const now = Date.now();
+    if (!followSuspended && now - lastCameraRef.current > CAMERA_THROTTLE_MS) {
+      lastCameraRef.current = now;
+      mapRef.current?.animateCamera(
+        {
+          center: { latitude: liveLoc.lat, longitude: liveLoc.lng },
+          heading,
+          pitch: 45,
+          zoom: 17.5,
+        },
+        { duration: 800 }
+      );
+    }
+
+    // Advance to the next step once we reach the current maneuver point
+    let idx = navStepIdx;
+    while (
+      idx < route.steps.length - 1 &&
+      distanceMeters(liveLoc, route.steps[idx].endLocation) < STEP_ADVANCE_METERS
+    ) {
+      idx += 1;
+    }
+    if (idx !== navStepIdx) setNavStepIdx(idx);
+
+    // Off-route: far from every point of the route line for several fixes
+    let minDist = Infinity;
+    for (const c of route.coordinates) {
+      const d = distanceMeters(liveLoc, { lat: c.latitude, lng: c.longitude });
+      if (d < minDist) minDist = d;
+      if (minDist < OFF_ROUTE_METERS) break;
+    }
+    if (minDist > OFF_ROUTE_METERS) {
+      offRouteCountRef.current += 1;
+      if (offRouteCountRef.current >= OFF_ROUTE_FIXES && !reroutingRef.current) {
+        reroutingRef.current = true;
+        getRoutes(liveLoc, { lat, lng }, mode).then((result) => {
+          reroutingRef.current = false;
+          offRouteCountRef.current = 0;
+          if (result.length) {
+            setRoutes(result);
+            setSelectedIdx(0);
+            setNavStepIdx(0);
+          }
+        });
+      }
+    } else {
+      offRouteCountRef.current = 0;
+    }
+  }, [navMode, liveLoc, heading, followSuspended, routes, selectedIdx, navStepIdx, lat, lng, mode]);
 
   if (!validCoords) return null;
 
@@ -249,6 +331,45 @@ export default function MapOutput({ map }) {
   };
 
   const routing = userLoc && !routeError && (fetching || !eta);
+
+  // Navigation-mode derived values
+  const currentStep = navMode ? selectedRoute?.steps[navStepIdx] : null;
+  const distToManeuver =
+    navMode && liveLoc && currentStep
+      ? metersToDisplay(distanceMeters(liveLoc, currentStep.endLocation))
+      : '';
+  const remaining =
+    navMode && selectedRoute
+      ? selectedRoute.steps.slice(navStepIdx).reduce(
+          (acc, s) => ({
+            sec: acc.sec + s.durationSeconds,
+            meters: acc.meters + s.distanceMeters,
+          }),
+          { sec: 0, meters: 0 }
+        )
+      : null;
+
+  const startNavigation = () => {
+    setNavMode(true);
+    setNavStepIdx(0);
+    setFollowSuspended(false);
+    offRouteCountRef.current = 0;
+    snapTo(SHEET_H); // hide the sheet; nav bar takes over
+  };
+
+  const exitNavigation = () => {
+    setNavMode(false);
+    setNavStepIdx(0);
+    setFollowSuspended(false);
+    snapRef.current = 'collapsed';
+    snapTo(COLLAPSED_OFFSET);
+    if (selectedRoute) {
+      mapRef.current?.fitToCoordinates(selectedRoute.coordinates, {
+        edgePadding: { top: 120, bottom: 300, left: 60, right: 60 },
+        animated: true,
+      });
+    }
+  };
 
 
 
@@ -316,7 +437,8 @@ export default function MapOutput({ map }) {
           showsCompass
           showsBuildings
           showsTraffic={mode === 'DRIVING'}
-          mapPadding={{ top: 0, right: 0, bottom: 240, left: 0 }}
+          mapPadding={{ top: 0, right: 0, bottom: navMode ? 100 : 240, left: 0 }}
+          onPanDrag={navMode ? () => setFollowSuspended(true) : undefined}
         >
           <Marker
             coordinate={{ latitude: lat, longitude: lng }}
@@ -339,7 +461,8 @@ export default function MapOutput({ map }) {
             </Marker>
           )}
           {/* Alternate routes (gray, tappable) under the selected one */}
-          {routes.map((route, i) =>
+          {!navMode &&
+            routes.map((route, i) =>
             i === selectedIdx ? null : (
               <Polyline
                 key={`alt-${i}`}
@@ -361,7 +484,8 @@ export default function MapOutput({ map }) {
             />
           )}
           {/* ETA bubbles on alternates: tap to switch */}
-          {routes.map((route, i) => {
+          {!navMode &&
+            routes.map((route, i) => {
             if (i === selectedIdx || !route.coordinates.length) return null;
             const mid = route.coordinates[Math.floor(route.coordinates.length / 2)];
             const diff = Math.round(route.minutes - (selectedRoute?.minutes ?? 0));
@@ -382,6 +506,39 @@ export default function MapOutput({ map }) {
             );
           })}
         </MapView>
+
+        {/* ── Navigation overlays ── */}
+        {navMode && <NavBanner step={currentStep} distanceText={distToManeuver} />}
+        {navMode && followSuspended && (
+          <TouchableOpacity
+            style={styles.recenterChip}
+            onPress={() => setFollowSuspended(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Resume following my location"
+          >
+            <Text style={styles.recenterChipText}>◎ Re-center</Text>
+          </TouchableOpacity>
+        )}
+        {navMode && (
+          <View style={styles.navBar}>
+            <View style={styles.navBarInfo}>
+              <Text style={styles.navBarTime}>
+                {remaining ? formatDuration(remaining.sec / 60) : '—'}
+              </Text>
+              <Text style={styles.navBarDistance}>
+                {remaining ? metersToDisplay(remaining.meters) : ''}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.exitBtn}
+              onPress={exitNavigation}
+              accessibilityRole="button"
+              accessibilityLabel="Exit navigation"
+            >
+              <Text style={styles.exitBtnText}>Exit</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* ── Bottom sheet ── */}
         <Animated.View
@@ -472,16 +629,29 @@ export default function MapOutput({ map }) {
             )}
           </View>
 
-          {/* Back to chat */}
-          <TouchableOpacity
-            style={styles.backBtn}
-            onPress={closeMap}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel="Back to chat"
-          >
-            <Text style={styles.backBtnText}>Back to Chat</Text>
-          </TouchableOpacity>
+          {/* Actions: back to chat + start navigation */}
+          <View style={styles.btnRow}>
+            <TouchableOpacity
+              style={styles.backBtn}
+              onPress={closeMap}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Back to chat"
+            >
+              <Text style={styles.backBtnText}>Back to Chat</Text>
+            </TouchableOpacity>
+            {selectedRoute && liveLoc && (
+              <TouchableOpacity
+                style={styles.startBtn}
+                onPress={startNavigation}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Start navigation"
+              >
+                <Text style={styles.startBtnText}>Start</Text>
+              </TouchableOpacity>
+            )}
+          </View>
 
           {/* Turn-by-turn list — below the fold until the sheet is dragged up */}
           <StepsList steps={selectedRoute?.steps} />
@@ -717,16 +887,100 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
 
+  btnRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
   backBtn: {
+    flex: 1,
+    backgroundColor: '#F5F5F7',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  backBtnText: {
+    color: '#C8102E',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  startBtn: {
+    flex: 1,
     backgroundColor: '#C8102E',
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
-    marginTop: 14,
   },
-  backBtnText: {
+  startBtnText: {
     color: '#fff',
     fontSize: 15,
+    fontWeight: '700',
+  },
+
+  /* ── Navigation mode ── */
+  navBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 34,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  navBarInfo: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+  },
+  navBarTime: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#C8102E',
+  },
+  navBarDistance: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#8A8A8E',
+  },
+  exitBtn: {
+    backgroundColor: '#F5F5F7',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 22,
+  },
+  exitBtnText: {
+    color: '#C8102E',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  recenterChip: {
+    position: 'absolute',
+    bottom: 110,
+    alignSelf: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  recenterChipText: {
+    color: '#C8102E',
+    fontSize: 13,
     fontWeight: '700',
   },
 });
