@@ -12,14 +12,12 @@ import {
   StatusBar,
   ActivityIndicator,
 } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
-import MapViewDirections from 'react-native-maps-directions';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { watchLocation, watchHeading, distanceMeters } from '../../../../maps-api/location';
+import { getRoutes } from '../../../../maps-api/directions';
 
 // Re-fetch the route once the user has moved this far from its origin.
 const REROUTE_THRESHOLD_METERS = 30;
-
-const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MINI_W = Math.round(SCREEN_WIDTH * 0.72);
@@ -59,7 +57,11 @@ function formatDuration(minutes) {
 export default function MapOutput({ map }) {
   const [expanded, setExpanded] = useState(false);
   const [mode, setMode] = useState('WALKING');
-  const [eta, setEta] = useState(null);
+  // All routes from the Directions API (index 0 = Google's best) and
+  // which one the user has selected.
+  const [routes, setRoutes] = useState([]);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [fetching, setFetching] = useState(false);
   const [routeError, setRouteError] = useState(false);
   // Route origin: updated only after real movement so we don't re-fetch
   // the route on every GPS fix.
@@ -118,7 +120,8 @@ export default function MapOutput({ map }) {
   // Track position + compass at navigation accuracy while the map is open
   useEffect(() => {
     if (!expanded) {
-      setEta(null);
+      setRoutes([]);
+      setSelectedIdx(0);
       setRouteError(false);
       return;
     }
@@ -170,8 +173,46 @@ export default function MapOutput({ map }) {
   // shows a default region unless they are real numbers.
   const lat = Number(map.lat);
   const lng = Number(map.lng);
+  const validCoords = Number.isFinite(lat) && Number.isFinite(lng);
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  // Fetch routes (with alternates) whenever the origin or mode changes
+  useEffect(() => {
+    if (!expanded || !userLoc || !validCoords) return;
+    let stale = false;
+    setFetching(true);
+
+    getRoutes(userLoc, { lat, lng }, mode).then((result) => {
+      if (stale) return;
+      setFetching(false);
+      setRoutes(result);
+      setSelectedIdx(0);
+      setRouteError(result.length === 0);
+
+      // Auto-zoom to show every route option once per open; after that
+      // the user controls the camera.
+      if (result.length && !hasFitRef.current) {
+        hasFitRef.current = true;
+        mapRef.current?.fitToCoordinates(
+          result.flatMap((r) => r.coordinates),
+          {
+            edgePadding: { top: 120, bottom: 300, left: 60, right: 60 },
+            animated: true,
+          }
+        );
+      }
+    });
+
+    return () => {
+      stale = true;
+    };
+  }, [expanded, userLoc, mode, lat, lng, validCoords]);
+
+  if (!validCoords) return null;
+
+  const selectedRoute = routes[selectedIdx] || null;
+  const eta = selectedRoute
+    ? { minutes: selectedRoute.minutes, miles: selectedRoute.miles }
+    : null;
 
   const miniRegion = {
     latitude: lat,
@@ -187,7 +228,7 @@ export default function MapOutput({ map }) {
     longitudeDelta: FULL_DELTA,
   };
 
-  const routing = userLoc && !eta;
+  const routing = userLoc && !routeError && (fetching || !eta);
 
 
 
@@ -277,38 +318,49 @@ export default function MapOutput({ map }) {
               </View>
             </Marker>
           )}
-          {userLoc && (
-            <MapViewDirections
-              origin={{ latitude: userLoc.lat, longitude: userLoc.lng }}
-              destination={{ latitude: lat, longitude: lng }}
-              apikey={GOOGLE_MAPS_API_KEY}
-              mode={mode}
-              strokeWidth={5}
+          {/* Alternate routes (gray, tappable) under the selected one */}
+          {routes.map((route, i) =>
+            i === selectedIdx ? null : (
+              <Polyline
+                key={`alt-${i}`}
+                coordinates={route.coordinates}
+                strokeColor="#9AA0A6"
+                strokeWidth={4}
+                tappable
+                onPress={() => setSelectedIdx(i)}
+                zIndex={1}
+              />
+            )
+          )}
+          {selectedRoute && (
+            <Polyline
+              coordinates={selectedRoute.coordinates}
               strokeColor="#C8102E"
-              precision="high"
-              resetOnChange={false}
-              onReady={(result) => {
-                setEta({
-                  minutes: result.duration,
-                  miles: (result.distance * 0.621371).toFixed(1),
-                });
-                // Auto-zoom to the route once per open; after that the user
-                // controls the camera (re-routes shouldn't yank it away).
-                if (!hasFitRef.current) {
-                  hasFitRef.current = true;
-                  mapRef.current?.fitToCoordinates(result.coordinates, {
-                    edgePadding: { top: 120, bottom: 300, left: 60, right: 60 },
-                    animated: true,
-                  });
-                }
-              }}
-              onError={(error) => {
-                console.error('Directions error:', error);
-                setEta(null);
-                setRouteError(true);
-              }}
+              strokeWidth={5}
+              zIndex={2}
             />
           )}
+          {/* ETA bubbles on alternates: tap to switch */}
+          {routes.map((route, i) => {
+            if (i === selectedIdx || !route.coordinates.length) return null;
+            const mid = route.coordinates[Math.floor(route.coordinates.length / 2)];
+            const diff = Math.round(route.minutes - (selectedRoute?.minutes ?? 0));
+            return (
+              <Marker
+                key={`eta-${i}`}
+                coordinate={mid}
+                anchor={{ x: 0.5, y: 0.5 }}
+                zIndex={5}
+                onPress={() => setSelectedIdx(i)}
+              >
+                <View style={styles.etaBubble}>
+                  <Text style={styles.etaBubbleText}>
+                    {diff > 0 ? `+${diff} min` : formatDuration(route.minutes)}
+                  </Text>
+                </View>
+              </Marker>
+            );
+          })}
         </MapView>
 
         {/* ── Bottom sheet ── */}
@@ -341,7 +393,8 @@ export default function MapOutput({ map }) {
                 onPress={() => {
                   if (mode !== m.key) {
                     setMode(m.key);
-                    setEta(null);
+                    setRoutes([]);
+                    setSelectedIdx(0);
                     setRouteError(false);
                   }
                 }}
@@ -471,6 +524,26 @@ const styles = StyleSheet.create({
     color: '#C8C8CC',
     fontWeight: '300',
     marginLeft: 8,
+  },
+
+  /* ── Alternate-route ETA bubbles ── */
+  etaBubble: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: '#E0E0E4',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  etaBubbleText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#3A3A3C',
   },
 
   /* ── Recenter (inline with mode row) ── */
