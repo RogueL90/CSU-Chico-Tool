@@ -15,13 +15,20 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { watchLocation, watchHeading, distanceMeters } from '../../../../maps-api/location';
 import { getRoutes } from '../../../../maps-api/directions';
+import StepsList from './map/StepsList';
 
 // Re-fetch the route once the user has moved this far from its origin.
 const REROUTE_THRESHOLD_METERS = 30;
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const MINI_W = Math.round(SCREEN_WIDTH * 0.72);
 const MINI_H = 130;
+
+// Bottom sheet snap geometry: the sheet is always SHEET_H tall; translateY
+// slides it between expanded (0), collapsed (summary only), and dismissed.
+const SHEET_H = Math.round(SCREEN_HEIGHT * 0.65);
+const COLLAPSED_VISIBLE = 300;
+const COLLAPSED_OFFSET = Math.max(0, SHEET_H - COLLAPSED_VISIBLE);
 
 const MINI_DELTA = 0.004;
 const FULL_DELTA = 0.003;
@@ -73,47 +80,64 @@ export default function MapOutput({ map }) {
   const userLocRef = useRef(null);
   const hasFitRef = useRef(false);
   const mapRef = useRef(null);
-  const sheetTranslateY = useRef(new Animated.Value(260)).current;
+  const sheetTranslateY = useRef(new Animated.Value(SHEET_H)).current;
+  // Which snap point the sheet is resting at: 'collapsed' | 'expanded'
+  const snapRef = useRef('collapsed');
 
-  const finishClosingMap = () => {
-    setExpanded(false);
-    sheetTranslateY.setValue(320);
-  };
-
-  // Quick slide-down dismiss — no bounce, no fly-off.
-  const closeMap = () => {
+  const snapTo = (value, onDone) => {
     Animated.timing(sheetTranslateY, {
-      toValue: 340,
-      duration: 180,
-      easing: Easing.in(Easing.quad),
+      toValue: value,
+      duration: 200,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start(({ finished }) => {
-      if (finished) finishClosingMap();
+      if (finished) onDone?.();
     });
   };
 
-  const snapSheetBack = () => {
-    Animated.timing(sheetTranslateY, {
-      toValue: 0,
-      duration: 150,
-      easing: Easing.out(Easing.quad),
-      useNativeDriver: true,
-    }).start();
+  const finishClosingMap = () => {
+    setExpanded(false);
+    snapRef.current = 'collapsed';
+    sheetTranslateY.setValue(SHEET_H);
   };
 
-  // Standard swipe-down-to-dismiss; upward drags get slight resistance.
+  const closeMap = () => snapTo(SHEET_H, finishClosingMap);
+
+  // Drag between snap points: collapsed <-> expanded, or down to dismiss.
   const sheetPanResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, gesture) =>
         Math.abs(gesture.dy) > 5 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
       onPanResponderMove: (_, gesture) => {
-        sheetTranslateY.setValue(gesture.dy > 0 ? gesture.dy : gesture.dy * 0.12);
+        const base = snapRef.current === 'expanded' ? 0 : COLLAPSED_OFFSET;
+        const next = Math.min(SHEET_H, Math.max(0, base + gesture.dy));
+        sheetTranslateY.setValue(next);
       },
       onPanResponderRelease: (_, gesture) => {
-        if (gesture.dy > 70 || gesture.vy > 0.5) closeMap();
-        else snapSheetBack();
+        const fast = Math.abs(gesture.vy) > 0.5;
+        if (snapRef.current === 'collapsed') {
+          if (gesture.dy < -40 || (fast && gesture.vy < 0)) {
+            snapRef.current = 'expanded';
+            snapTo(0);
+          } else if (gesture.dy > 70 || (fast && gesture.vy > 0)) {
+            closeMap();
+          } else {
+            snapTo(COLLAPSED_OFFSET);
+          }
+        } else {
+          if (gesture.dy > COLLAPSED_OFFSET + 80) {
+            closeMap();
+          } else if (gesture.dy > 50 || (fast && gesture.vy > 0)) {
+            snapRef.current = 'collapsed';
+            snapTo(COLLAPSED_OFFSET);
+          } else {
+            snapTo(0);
+          }
+        }
       },
-      onPanResponderTerminate: snapSheetBack,
+      onPanResponderTerminate: () => {
+        snapTo(snapRef.current === 'expanded' ? 0 : COLLAPSED_OFFSET);
+      },
     })
   ).current;
 
@@ -126,13 +150,9 @@ export default function MapOutput({ map }) {
       return;
     }
 
-    sheetTranslateY.setValue(320);
-    Animated.timing(sheetTranslateY, {
-      toValue: 0,
-      duration: 200,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
+    snapRef.current = 'collapsed';
+    sheetTranslateY.setValue(SHEET_H);
+    snapTo(COLLAPSED_OFFSET);
 
     let stopPos = null;
     let stopHeading = null;
@@ -372,8 +392,8 @@ export default function MapOutput({ map }) {
             {...sheetPanResponder.panHandlers}
             accessible
             accessibilityRole="button"
-            accessibilityLabel="Swipe down to close the map"
-            accessibilityHint="Drag this handle downward to return to chat"
+            accessibilityLabel="Directions sheet handle"
+            accessibilityHint="Drag up for turn-by-turn directions, down to close the map"
           >
             <View style={styles.grabber} />
           </View>
@@ -462,6 +482,9 @@ export default function MapOutput({ map }) {
           >
             <Text style={styles.backBtnText}>Back to Chat</Text>
           </TouchableOpacity>
+
+          {/* Turn-by-turn list — below the fold until the sheet is dragged up */}
+          <StepsList steps={selectedRoute?.steps} />
         </Animated.View>
       </Modal>
     </View>
@@ -598,6 +621,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
+    height: SHEET_H,
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
