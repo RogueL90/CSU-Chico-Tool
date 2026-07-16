@@ -19,7 +19,7 @@ SYSTEM_PROMPT = """You are Willie, the Chico State campus assistant. Your job is
 
 You have access to these tools:
 1. retrieve_from_kb - Query the Chico State knowledge base for factual answers
-2. lookup_place - Look up coordinates for a campus building or location
+2. lookup_place - Look up coordinates for a campus building or location. If the user's GPS location is provided and the question is about proximity ("nearest", "closest", "near me"), pass it as near_lat/near_lng so results are biased to where the user actually is.
 3. extract_phone - Extract and validate phone numbers from text
 4. classify_outputs - Determine what output types (text, map, phone) to show
 5. score_confidence - Score how confident you are in your answer (0-100)
@@ -50,13 +50,16 @@ Always return a valid JSON object with this structure:
 
 
 def create_agent():
-    # Build a boto3 session with explicit credentials from .env
-    session = boto3.Session(
-        aws_access_key_id=os.environ.get("EXPO_PUBLIC_AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.environ.get("EXPO_PUBLIC_AWS_SECRET_ACCESS_KEY"),
-        aws_session_token=os.environ.get("EXPO_PUBLIC_AWS_SESSION_TOKEN") or None,
-        region_name=os.environ.get("EXPO_PUBLIC_AWS_REGION", "us-west-2"),
-    )
+    # Explicit credentials from .env for local dev; otherwise fall back to
+    # boto3's default chain (e.g. the Lambda execution role).
+    session_kwargs = {"region_name": os.environ.get("EXPO_PUBLIC_AWS_REGION", "us-west-2")}
+    if os.environ.get("EXPO_PUBLIC_AWS_ACCESS_KEY_ID"):
+        session_kwargs.update(
+            aws_access_key_id=os.environ["EXPO_PUBLIC_AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ.get("EXPO_PUBLIC_AWS_SECRET_ACCESS_KEY"),
+            aws_session_token=os.environ.get("EXPO_PUBLIC_AWS_SESSION_TOKEN") or None,
+        )
+    session = boto3.Session(**session_kwargs)
 
     model = BedrockModel(
         model_id=ORCHESTRATOR_MODEL_ID,
@@ -78,7 +81,9 @@ def create_agent():
     return agent
 
 
-async def process_query(query: str, conversation_history: list = None) -> dict:
+async def process_query(
+    query: str, conversation_history: list = None, user_location: dict = None
+) -> dict:
     agent = create_agent()
 
     prompt = query
@@ -87,6 +92,14 @@ async def process_query(query: str, conversation_history: list = None) -> dict:
             [f"{msg['role']}: {msg['text']}" for msg in conversation_history[-6:]]
         )
         prompt = f"Conversation so far:\n{context}\n\nLatest question: {query}"
+
+    if user_location and user_location.get("lat") and user_location.get("lng"):
+        prompt += (
+            f"\n\nThe user's current GPS location: latitude {user_location['lat']}, "
+            f"longitude {user_location['lng']}. If the question involves proximity "
+            f"('nearest', 'closest', 'near me'), pass these coordinates to "
+            f"lookup_place as near_lat and near_lng."
+        )
 
     result = agent(prompt)
     response_text = str(result)
@@ -114,6 +127,23 @@ async def process_query(query: str, conversation_history: list = None) -> dict:
     }
 
 
+def sanitize_map(map_data) -> dict | None:
+    """Coerce LLM-produced map data to numeric coords; drop it if invalid."""
+    if not isinstance(map_data, dict):
+        return None
+    try:
+        lat = float(map_data["lat"])
+        lng = float(map_data["lng"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return {
+        "label": str(map_data.get("label") or "Location"),
+        "lat": lat,
+        "lng": lng,
+        "address": map_data.get("address"),
+    }
+
+
 def sanitize_response(parsed: dict) -> dict:
     confidence = float(parsed.get("confidence", 50))
 
@@ -121,7 +151,7 @@ def sanitize_response(parsed: dict) -> dict:
         "confidence": confidence,
         "text": parsed.get("text"),
         "phone": parsed.get("phone"),
-        "map": parsed.get("map"),
+        "map": sanitize_map(parsed.get("map")),
         "output_types": parsed.get("output_types", ["text"]),
         "follow_up_choices": None,
         "follow_up_question": None,

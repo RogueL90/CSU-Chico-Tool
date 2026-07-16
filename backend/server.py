@@ -38,6 +38,7 @@ app.add_middleware(
 class AskRequest(BaseModel):
     query: str
     conversation_history: Optional[list] = None
+    user_location: Optional[dict] = None
 
 
 class FollowUpChoice(BaseModel):
@@ -57,7 +58,9 @@ class AskResponse(BaseModel):
 
 @app.post("/ask", response_model=AskResponse)
 async def ask(request: AskRequest):
-    result = await process_query(request.query, request.conversation_history)
+    result = await process_query(
+        request.query, request.conversation_history, request.user_location
+    )
     return AskResponse(**result)
 
 

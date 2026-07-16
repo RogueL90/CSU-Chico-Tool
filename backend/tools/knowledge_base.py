@@ -19,13 +19,16 @@ def retrieve_from_kb(query: str) -> str:
     Returns:
         The knowledge base answer text, or an error message
     """
-    client = boto3.client(
-        "bedrock-agent-runtime",
-        region_name=os.environ.get("EXPO_PUBLIC_AWS_REGION", "us-west-2"),
-        aws_access_key_id=os.environ.get("EXPO_PUBLIC_AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.environ.get("EXPO_PUBLIC_AWS_SECRET_ACCESS_KEY"),
-        aws_session_token=os.environ.get("EXPO_PUBLIC_AWS_SESSION_TOKEN") or None,
-    )
+    # Explicit credentials from .env for local dev; otherwise fall back to
+    # boto3's default chain (e.g. the Lambda execution role).
+    client_kwargs = {"region_name": os.environ.get("EXPO_PUBLIC_AWS_REGION", "us-west-2")}
+    if os.environ.get("EXPO_PUBLIC_AWS_ACCESS_KEY_ID"):
+        client_kwargs.update(
+            aws_access_key_id=os.environ["EXPO_PUBLIC_AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ.get("EXPO_PUBLIC_AWS_SECRET_ACCESS_KEY"),
+            aws_session_token=os.environ.get("EXPO_PUBLIC_AWS_SESSION_TOKEN") or None,
+        )
+    client = boto3.client("bedrock-agent-runtime", **client_kwargs)
 
     kb_id = os.environ.get("EXPO_PUBLIC_KNOWLEDGE_BASE_ID", "EVLCAIRVMQ")
     model_arn = os.environ.get(

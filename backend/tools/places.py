@@ -13,13 +13,15 @@ BIAS_RADIUS = 3000
 
 
 @tool
-def lookup_place(query: str) -> str:
+def lookup_place(query: str, near_lat: float = None, near_lng: float = None) -> str:
     """
     Look up the coordinates of a campus building or location at Chico State.
     Use this when the answer mentions a specific building, hall, or campus location.
 
     Args:
         query: The building or place name, e.g. "Kendall Hall" or "Meriam Library"
+        near_lat: Optional latitude to bias results toward (the user's GPS position)
+        near_lng: Optional longitude to bias results toward (the user's GPS position)
 
     Returns:
         JSON string with label, lat, lng, address — or an error message
@@ -28,7 +30,14 @@ def lookup_place(query: str) -> str:
     if not api_key:
         return "Google Maps API key not configured"
 
-    search_query = f"{query}, Chico State, Chico CA"
+    # With GPS coordinates, anchor the text loosely ("Chico CA") so the
+    # location bias decides proximity; otherwise anchor hard to campus.
+    if near_lat is not None and near_lng is not None:
+        search_query = f"{query}, Chico CA"
+        bias_center = {"latitude": near_lat, "longitude": near_lng}
+    else:
+        search_query = f"{query}, Chico State, Chico CA"
+        bias_center = CAMPUS_CENTER
 
     try:
         response = httpx.post(
@@ -41,7 +50,7 @@ def lookup_place(query: str) -> str:
             json={
                 "textQuery": search_query,
                 "locationBias": {
-                    "circle": {"center": CAMPUS_CENTER, "radius": BIAS_RADIUS}
+                    "circle": {"center": bias_center, "radius": BIAS_RADIUS}
                 },
                 "maxResultCount": 1,
                 "languageCode": "en",
