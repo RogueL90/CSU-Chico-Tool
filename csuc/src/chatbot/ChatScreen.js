@@ -233,19 +233,15 @@ export default function ChatScreen() {
             <Text style={styles.headerTitle}>Call Willie</Text>
           </View>
         </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            style={styles.restartBtn}
-            onPress={handleRestart}
-            accessibilityRole="button"
-            accessibilityLabel="Start over"
-          >
-            <Text style={styles.restartTxt}>↺</Text>
-          </TouchableOpacity>
-        </View>
-        <Text style={styles.headerSub}>
-          A campus chatbot for quick answers, student services, and Wildcat life.
-        </Text>
+        <TouchableOpacity
+          style={styles.restartBtn}
+          onPress={handleRestart}
+          accessibilityRole="button"
+          accessibilityLabel="Start over"
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Text style={styles.restartTxt}>↺</Text>
+        </TouchableOpacity>
       </View>
 
       <KeyboardAvoidingView
@@ -379,30 +375,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    flexWrap: 'wrap',
     backgroundColor: '#C8102E',
     paddingHorizontal: 18,
-    paddingTop: 16,
-    paddingBottom: 18,
+    paddingTop: 12,
+    paddingBottom: 14,
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
   },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  brandMark: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
-  brandPaw: { fontSize: 23 },
+  brandMark: { width: 40, height: 40, borderRadius: 11, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  brandPaw: { fontSize: 21 },
   eyebrow: { color: '#FFE6E6', fontSize: 11, fontWeight: '800', letterSpacing: 0.8 },
-  headerTitle: { color: '#fff', fontSize: 25, fontWeight: '800', letterSpacing: -0.4 },
-  headerSub: { width: '100%', color: '#fff', fontSize: 14, lineHeight: 20, marginTop: 14, fontWeight: '500' },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  headerTitle: { color: '#fff', fontSize: 22, fontWeight: '800', letterSpacing: -0.4 },
   restartBtn: {
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderRadius: 16,
-    width: 32,
-    height: 32,
-    justifyContent: 'center',
-    alignItems: 'center',
+    padding: 4,
   },
-  restartTxt: { color: '#fff', fontSize: 19, fontWeight: '700' },
+  restartTxt: { color: '#fff', fontSize: 21, fontWeight: '600' },
 
   // Message list
   listContent: { paddingTop: 18, paddingBottom: 10 },

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, View, Text, StyleSheet } from 'react-native';
+import { Animated, Easing, View, Text, StyleSheet } from 'react-native';
 import TextOutput from './outputs/TextOutput';
 import MapOutput from './outputs/MapOutput';
 import BotMarkdown from './BotMarkdown';
@@ -24,12 +24,12 @@ import BotMarkdown from './BotMarkdown';
 export default function MessageBubble({ message }) {
   const entrance = useRef(new Animated.Value(0)).current;
 
+  // Quick fade-slide — fast enough to never feel like waiting.
   useEffect(() => {
-    Animated.spring(entrance, {
+    Animated.timing(entrance, {
       toValue: 1,
-      damping: 18,
-      stiffness: 170,
-      mass: 0.75,
+      duration: 160,
+      easing: Easing.out(Easing.quad),
       useNativeDriver: true,
     }).start();
   }, [entrance]);
@@ -40,13 +40,7 @@ export default function MessageBubble({ message }) {
       {
         translateY: entrance.interpolate({
           inputRange: [0, 1],
-          outputRange: [12, 0],
-        }),
-      },
-      {
-        scale: entrance.interpolate({
-          inputRange: [0, 1],
-          outputRange: [0.98, 1],
+          outputRange: [8, 0],
         }),
       },
     ],

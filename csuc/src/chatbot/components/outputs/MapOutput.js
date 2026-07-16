@@ -4,11 +4,11 @@ import {
   Text,
   TouchableOpacity,
   Animated,
+  Easing,
   PanResponder,
   Modal,
   StyleSheet,
   Dimensions,
-  SafeAreaView,
   StatusBar,
   ActivityIndicator,
 } from 'react-native';
@@ -75,13 +75,15 @@ export default function MapOutput({ map }) {
 
   const finishClosingMap = () => {
     setExpanded(false);
-    sheetTranslateY.setValue(260);
+    sheetTranslateY.setValue(320);
   };
 
-  const animateBackToChat = () => {
+  // Quick slide-down dismiss — no bounce, no fly-off.
+  const closeMap = () => {
     Animated.timing(sheetTranslateY, {
-      toValue: -420,
-      duration: 230,
+      toValue: 340,
+      duration: 180,
+      easing: Easing.in(Easing.quad),
       useNativeDriver: true,
     }).start(({ finished }) => {
       if (finished) finishClosingMap();
@@ -89,26 +91,24 @@ export default function MapOutput({ map }) {
   };
 
   const snapSheetBack = () => {
-    Animated.spring(sheetTranslateY, {
+    Animated.timing(sheetTranslateY, {
       toValue: 0,
-      damping: 20,
-      stiffness: 220,
-      mass: 0.8,
+      duration: 150,
+      easing: Easing.out(Easing.quad),
       useNativeDriver: true,
     }).start();
   };
 
+  // Standard swipe-down-to-dismiss; upward drags get slight resistance.
   const sheetPanResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, gesture) =>
         Math.abs(gesture.dy) > 5 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
       onPanResponderMove: (_, gesture) => {
-        // This handle intentionally follows upward movement only. A downward
-        // drag gets a little resistance, then springs back into place.
-        sheetTranslateY.setValue(gesture.dy < 0 ? gesture.dy : gesture.dy * 0.12);
+        sheetTranslateY.setValue(gesture.dy > 0 ? gesture.dy : gesture.dy * 0.12);
       },
       onPanResponderRelease: (_, gesture) => {
-        if (gesture.dy < -55 || gesture.vy < -0.65) animateBackToChat();
+        if (gesture.dy > 70 || gesture.vy > 0.5) closeMap();
         else snapSheetBack();
       },
       onPanResponderTerminate: snapSheetBack,
@@ -123,12 +123,11 @@ export default function MapOutput({ map }) {
       return;
     }
 
-    sheetTranslateY.setValue(260);
-    Animated.spring(sheetTranslateY, {
+    sheetTranslateY.setValue(320);
+    Animated.timing(sheetTranslateY, {
       toValue: 0,
-      damping: 19,
-      stiffness: 180,
-      mass: 0.85,
+      duration: 200,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
 
@@ -312,40 +311,6 @@ export default function MapOutput({ map }) {
           )}
         </MapView>
 
-        {/* Close button */}
-        <SafeAreaView style={styles.closeWrap} pointerEvents="box-none">
-          <TouchableOpacity
-            style={styles.closeBtn}
-            onPress={() => setExpanded(false)}
-            accessibilityRole="button"
-            accessibilityLabel="Close map"
-          >
-            <Text style={styles.closeBtnText}>✕</Text>
-          </TouchableOpacity>
-
-          {/* Re-center on my position */}
-          {liveLoc && (
-            <TouchableOpacity
-              style={[styles.closeBtn, styles.recenterBtn]}
-              onPress={() =>
-                mapRef.current?.animateToRegion(
-                  {
-                    latitude: liveLoc.lat,
-                    longitude: liveLoc.lng,
-                    latitudeDelta: FULL_DELTA,
-                    longitudeDelta: FULL_DELTA,
-                  },
-                  350
-                )
-              }
-              accessibilityRole="button"
-              accessibilityLabel="Center map on my location"
-            >
-              <Text style={styles.closeBtnText}>◉</Text>
-            </TouchableOpacity>
-          )}
-        </SafeAreaView>
-
         {/* ── Bottom sheet ── */}
         <Animated.View
           style={[styles.sheet, { transform: [{ translateY: sheetTranslateY }] }]}
@@ -355,11 +320,10 @@ export default function MapOutput({ map }) {
             {...sheetPanResponder.panHandlers}
             accessible
             accessibilityRole="button"
-            accessibilityLabel="Swipe up to return to chat"
-            accessibilityHint="Drag this handle upward to close the map"
+            accessibilityLabel="Swipe down to close the map"
+            accessibilityHint="Drag this handle downward to return to chat"
           >
             <View style={styles.grabber} />
-            <Text style={styles.swipeHint}>Swipe up for chat</Text>
           </View>
 
           {/* Destination */}
@@ -368,7 +332,7 @@ export default function MapOutput({ map }) {
             <Text style={styles.sheetAddress} numberOfLines={1}>{address}</Text>
           )}
 
-          {/* Mode segmented control */}
+          {/* Mode segmented control + recenter */}
           <View style={styles.segment}>
             {MODES.map((m) => (
               <TouchableOpacity
@@ -394,6 +358,26 @@ export default function MapOutput({ map }) {
                 </Text>
               </TouchableOpacity>
             ))}
+            {liveLoc && (
+              <TouchableOpacity
+                style={styles.recenterBtn}
+                onPress={() =>
+                  mapRef.current?.animateToRegion(
+                    {
+                      latitude: liveLoc.lat,
+                      longitude: liveLoc.lng,
+                      latitudeDelta: FULL_DELTA,
+                      longitudeDelta: FULL_DELTA,
+                    },
+                    350
+                  )
+                }
+                accessibilityRole="button"
+                accessibilityLabel="Center map on my location"
+              >
+                <Text style={styles.recenterIcon}>◎</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* ETA */}
@@ -418,7 +402,7 @@ export default function MapOutput({ map }) {
           {/* Back to chat */}
           <TouchableOpacity
             style={styles.backBtn}
-            onPress={animateBackToChat}
+            onPress={closeMap}
             activeOpacity={0.85}
             accessibilityRole="button"
             accessibilityLabel="Back to chat"
@@ -489,34 +473,17 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
 
-  /* ── Close button ── */
-  closeWrap: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    paddingTop: 8,
-    paddingRight: 16,
-  },
-  closeBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.95)',
+  /* ── Recenter (inline with mode row) ── */
+  recenterBtn: {
+    width: 48,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
-    elevation: 5,
+    backgroundColor: '#F5F5F7',
   },
-  closeBtnText: {
-    fontSize: 16,
+  recenterIcon: {
+    fontSize: 18,
     color: '#3A3A3C',
-    fontWeight: '600',
-  },
-  recenterBtn: {
-    marginTop: 10,
   },
 
   /* ── Live user marker (dot + heading cone) ── */
@@ -582,13 +549,6 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  swipeHint: {
-    color: '#8A8A8E',
-    fontSize: 10,
-    fontWeight: '600',
-    marginTop: 5,
-    letterSpacing: 0.2,
   },
   sheetTitle: {
     fontSize: 19,
