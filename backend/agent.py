@@ -9,12 +9,18 @@ decision are normalized in Python after the model responds.
 import json
 import os
 import re
+from urllib.parse import urlsplit
 
 import boto3
 from strands import Agent
 from strands.models.bedrock import BedrockModel
 
-from tools.knowledge_base import retrieve_from_kb
+from tools.knowledge_base import (
+    begin_url_capture,
+    end_url_capture,
+    get_captured_urls,
+    retrieve_from_kb,
+)
 from tools.places import lookup_place
 
 ORCHESTRATOR_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
@@ -89,10 +95,15 @@ RULES:
 - If clarifying: set needs_clarification to true, set follow_up_choices to 2 options, set follow_up_question to a short prompt. Set map and phone to null. Text can be null or a brief partial answer.
 - The text field must ONLY contain the student-facing answer. NEVER mention tools, tool names, internal decisions, JSON, workflows, KB retrieval, or anything about how you work internally. The student should have no idea tools exist.
 - Keep answers concise and student-friendly.
-- Format "text" with simple markdown when it improves readability: **bold** for key facts (names, deadlines, room numbers, phone numbers), "-" bullet lists when listing multiple items, and [title](url) for links. No headings or tables. The text lives inside a JSON string, so escape newlines as \\n.
+- Format "text" with simple markdown when it improves readability: **bold** for key facts (names, deadlines, room numbers, phone numbers), "-" bullet lists when listing multiple items, and [title](url) for verified links. No headings or tables. The text lives inside a JSON string, so escape newlines as \\n.
+- URL GROUNDING: Never guess, infer, construct, or alter a URL. Use a Markdown link only when its exact target appears under VERIFIED SOURCE URLS in the retrieval result or in APPROVED OFFICIAL URLS below. If no verified URL is available, write the resource name as plain text without a link.
+- APPROVED OFFICIAL URLS:
+  - Student Health Center: https://www.csuchico.edu/healthcenter/
+  - CARE team reporting form: https://cm.maxient.com/reportingform.php?CSUChico&layout_id=6
+- Do not substitute Counseling & Wellness Services for the Student Health Center; they are different campus resources.
 - ALWAYS use lookup_place if your answer mentions ANY campus building, office, or location — even if the user didn't explicitly ask "where."
 - ALWAYS try to include the number if the KB answer contains ANY phone number — even if the user didn't explicitly ask for a number.
-- Be PROACTIVE: if the topic is even slightly related to safety, health, or emergencies, include the relevant phone number (campus police, wellness center, etc.) as an output type phone, even if the user didn't ask for it. For example, if someone mentions stress, mental health, feeling overwhelmed, or being hurt, include the Wellness Center or Counseling number. If someone mentions feeling unsafe, include University Police.
+- Be PROACTIVE: if the topic is even slightly related to safety, health, or emergencies, include the appropriate verified phone number (campus police, Student Health Center, Counseling & Wellness Services, etc.) as an output type phone, even if the user didn't ask for it. For example, if someone mentions stress, mental health, or feeling overwhelmed, include the Counseling & Wellness Services number when supported by the retrieved information. If someone mentions feeling unsafe, include University Police.
 """
 
 # Reuse the AWS session/model across warm Lambda invocations. A fresh Agent is
@@ -119,6 +130,72 @@ INTERNAL_LINE_PATTERN = re.compile(
     r"(?i)^.*(?:retrieve_from_kb|lookup_place|tool call|no additional tools|"
     r"classify_outputs|extract_phone|knowledge base retrieval).*$"
 )
+MARKDOWN_LINK_PATTERN = re.compile(
+    r"\[([^\]]+)\]\(((?:[^()\s]+|\([^()\s]*\))+)\)"
+)
+APPROVED_OFFICIAL_URLS = {
+    "https://www.csuchico.edu/healthcenter/",
+    "https://cm.maxient.com/reportingform.php?CSUChico&layout_id=6",
+}
+
+
+def canonicalize_url(url: str) -> str | None:
+    """Normalize safe HTTP URLs for exact source comparison."""
+    try:
+        parsed = urlsplit(url.strip())
+        port = parsed.port
+    except (AttributeError, ValueError):
+        return None
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
+        return None
+
+    host = parsed.hostname.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if port and not (
+        parsed.scheme.lower() == "http" and port == 80
+    ) and not (parsed.scheme.lower() == "https" and port == 443):
+        host = f"{host}:{port}"
+
+    path = re.sub(r"/{2,}", "/", parsed.path or "/")
+    if path != "/":
+        path = path.rstrip("/")
+    query = f"?{parsed.query}" if parsed.query else ""
+    return f"{host}{path}{query}"
+
+
+def sanitize_markdown_links(text: str | None, trusted_urls: set[str]) -> str | None:
+    """Keep only links that match a retrieved or explicitly approved URL."""
+    if not text:
+        return text
+
+    trusted_by_canonical = {}
+    for trusted_url in sorted(trusted_urls):
+        canonical = canonicalize_url(trusted_url)
+        if canonical:
+            trusted_by_canonical[canonical] = trusted_url
+
+    # Explicitly approved HTTPS destinations always win over equivalent
+    # retrieved variants such as HTTP, missing-www, or trailing-slash forms.
+    for approved_url in sorted(APPROVED_OFFICIAL_URLS):
+        canonical = canonicalize_url(approved_url)
+        if canonical:
+            trusted_by_canonical[canonical] = approved_url
+
+    def replace_link(match: re.Match) -> str:
+        label, target = match.groups()
+        canonical = canonicalize_url(target)
+        verified_target = trusted_by_canonical.get(canonical)
+        if not verified_target:
+            return label
+        return f"[{label}]({verified_target})"
+
+    return MARKDOWN_LINK_PATTERN.sub(replace_link, text)
 
 
 def create_agent():
@@ -246,7 +323,7 @@ def normalize_choices(raw_choices) -> list[dict] | None:
     ]
 
 
-def sanitize_response(parsed: dict) -> dict:
+def sanitize_response(parsed: dict, trusted_urls: set[str]) -> dict:
     """Normalize model JSON into the existing Expo/FastAPI response contract."""
     text = strip_reflection_tags(parsed.get("text") or parsed.get("answerText"))
 
@@ -264,6 +341,7 @@ def sanitize_response(parsed: dict) -> dict:
             elif output.get("type") == "text" and not text:
                 text = strip_reflection_tags(output.get("text"))
 
+    text = sanitize_markdown_links(text, trusted_urls)
     map_data = sanitize_map(map_data)
     phone = extract_phone(text, phone_candidate)
     needs_clarification = bool(
@@ -273,9 +351,12 @@ def sanitize_response(parsed: dict) -> dict:
         parsed.get("follow_up_choices")
         or (parsed.get("clarification") or {}).get("choices")
     )
-    question = strip_reflection_tags(
-        parsed.get("follow_up_question")
-        or (parsed.get("clarification") or {}).get("prompt")
+    question = sanitize_markdown_links(
+        strip_reflection_tags(
+            parsed.get("follow_up_question")
+            or (parsed.get("clarification") or {}).get("prompt")
+        ),
+        trusted_urls,
     )
 
     # Never manufacture generic chips. If the model requests clarification but
@@ -348,14 +429,22 @@ async def process_query(
             "values to lookup_place as near_lat and near_lng."
         )
 
-    result = agent(prompt)
+    url_capture_token = begin_url_capture()
+    try:
+        result = agent(prompt)
+        trusted_urls = get_captured_urls()
+    finally:
+        end_url_capture(url_capture_token)
+
     response_text = str(result)
     parsed = try_parse_json(response_text)
     if parsed:
-        return sanitize_response(parsed)
+        return sanitize_response(parsed, trusted_urls)
 
     # Parsing failures should never expose raw JSON or generic follow-up chips.
-    clean_text = strip_reflection_tags(response_text)
+    clean_text = sanitize_markdown_links(
+        strip_reflection_tags(response_text), trusted_urls
+    )
     if not clean_text or clean_text.lstrip().startswith("{"):
         clean_text = "I found information, but I couldn't format the response. Please try again."
     phone = extract_phone(clean_text)
