@@ -543,7 +543,7 @@ export default function ChatScreen() {
           ref={listRef}
           data={messages}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <MessageBubble message={item} />}
+          renderItem={({ item, index }) => <MessageBubble message={item} isFirst={index === 0} />}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={showWelcome ? (
             <Animated.View style={[styles.welcomeCard, {
@@ -580,7 +580,8 @@ export default function ChatScreen() {
             listRef.current?.scrollToEnd({ animated: true })
           }
           keyboardShouldPersistTaps="always"
-          keyboardDismissMode="none"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          onTouchStart={() => inputRef.current?.blur()}
           showsVerticalScrollIndicator={false}
         />
 
@@ -754,16 +755,16 @@ const styles = StyleSheet.create({
   choiceWrap: { flex: 1 },
   chip: {
     width: '100%',
-    backgroundColor: '#FFF0F1',
+    backgroundColor: '#C8102E',
     borderRadius: 20,
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderWidth: 1.5,
-    borderColor: '#F3C6CC',
+    borderColor: '#C8102E',
     alignItems: 'center',
   },
-  chipText: { fontSize: 13, color: '#8B0A22', fontWeight: '600', textAlign: 'center' },
-  chipSelected: { backgroundColor: '#C8102E', borderColor: '#C8102E' },
+  chipText: { fontSize: 13, color: '#FFFFFF', fontWeight: '700', textAlign: 'center' },
+  chipSelected: { backgroundColor: '#8B0A22', borderColor: '#8B0A22' },
   chipTextSelected: { color: '#fff' },
 
   // Input bar

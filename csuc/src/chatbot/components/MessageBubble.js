@@ -21,7 +21,7 @@ import BotMarkdown from './BotMarkdown';
  * Choice chips live in the chips bar in ChatScreen.
  * Neither belongs inside a message bubble.
  */
-export default function MessageBubble({ message }) {
+export default function MessageBubble({ message, isFirst = false }) {
   const entranceOpacity = useRef(new Animated.Value(0)).current;
   const entranceMotion = useRef(new Animated.Value(0)).current;
   const successPulse = useRef(new Animated.Value(1)).current;
@@ -98,7 +98,7 @@ export default function MessageBubble({ message }) {
       </View>
       <View style={styles.botContent}>
         {!!message.text && (
-          <View style={styles.botBubble}>
+          <View style={[styles.botBubble, isFirst && styles.firstBotBubble]}>
             <BotMarkdown text={message.text} />
           </View>
         )}
@@ -165,6 +165,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     alignSelf: 'flex-start',
     maxWidth: '92%',
+  },
+  firstBotBubble: {
+    borderRadius: 24,
+    borderBottomLeftRadius: 24,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
   },
   botText: { color: '#2C2022', fontSize: 15, lineHeight: 22 },
   outputsContainer: { marginTop: 4 },
