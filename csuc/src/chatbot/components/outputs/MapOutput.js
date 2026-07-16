@@ -11,7 +11,6 @@ import {
   SafeAreaView,
   StatusBar,
   ActivityIndicator,
-  PanResponder,
 } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
@@ -191,27 +190,7 @@ export default function MapOutput({ map }) {
 
   const routing = userLoc && !eta;
 
-  // Swipe-down-to-dismiss on the bottom sheet.
-  // Only claims the gesture on a clear downward drag so button taps still work.
-  const sheetPanResponder = PanResponder.create({
-    onStartShouldSetPanResponder: () => false,
-    onMoveShouldSetPanResponder: (_, g) =>
-      g.dy > 8 && Math.abs(g.dy) > Math.abs(g.dx),
-    onPanResponderRelease: (_, g) => handleSheetSwipeRelease(g),
-  });
 
-  // TODO(you): decide when a swipe should close the map and return to chat.
-  // Available on `g`:
-  //   g.dy — total pixels moved down (positive = downward)
-  //   g.vy — velocity in px/ms      (positive = downward)
-  // Call setExpanded(false) to dismiss the modal.
-  //
-  // Consider the trade-off: distance-only feels predictable but requires a
-  // big drag; velocity-based lets a quick flick dismiss (Apple-style) but
-  // can trigger accidentally. A combined threshold is usually the sweet spot.
-  function handleSheetSwipeRelease(g) {
-    if (g.dy > 80 || g.vy > 0.5) setExpanded(false);
-  }
 
   return (
     <View style={styles.wrapper}>
