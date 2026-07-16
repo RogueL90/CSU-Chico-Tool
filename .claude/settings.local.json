@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(EXPO_START_TIMEOUT_S=8 node -e ' *)"
+    ]
+  }
+}
