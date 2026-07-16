@@ -101,6 +101,11 @@ export default function MapOutput({ map }) {
   const userLocRef = useRef(null);
   const hasFitRef = useRef(false);
   const mapRef = useRef(null);
+  // Bumped to force a full MapView remount — the Google iOS renderer can
+  // blank its tiles after the prop churn of leaving navigation, and a
+  // fresh native map is the only reliable recovery.
+  const [mapEpoch, setMapEpoch] = useState(0);
+  const pendingFitRef = useRef(false);
   const sheetTranslateY = useRef(new Animated.Value(SHEET_H)).current;
   // Which snap point the sheet is resting at: 'collapsed' | 'expanded'
   const snapRef = useRef('collapsed');
@@ -361,10 +366,19 @@ export default function MapOutput({ map }) {
     setFollowSuspended(false);
     snapRef.current = 'collapsed';
     snapTo(COLLAPSED_OFFSET);
+    // Remount the map instead of mutating the existing one back to browse
+    // state — the fit happens in onMapReady once the new map is live.
+    pendingFitRef.current = true;
+    setMapEpoch((e) => e + 1);
+  };
+
+  const handleMapReady = () => {
+    if (!pendingFitRef.current) return;
+    pendingFitRef.current = false;
     if (selectedRoute?.coordinates.length) {
       mapRef.current?.fitToCoordinates(selectedRoute.coordinates, {
         edgePadding: { top: 120, bottom: 300, left: 60, right: 60 },
-        animated: true,
+        animated: false,
       });
     }
   };
@@ -424,10 +438,12 @@ export default function MapOutput({ map }) {
 
         {/* Map fills the entire screen */}
         <MapView
+          key={`map-${mapEpoch}`}
           ref={mapRef}
           provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFill}
           initialRegion={fullRegion}
+          onMapReady={handleMapReady}
           scrollEnabled
           zoomEnabled
           rotateEnabled
