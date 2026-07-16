@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,15 @@ import {
   StatusBar,
 } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
+import { getCurrentLocation } from '../../../../maps-api/location';
+
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+
+const MODES = [
+  { key: 'WALKING', icon: '🚶', label: 'Walk' },
+  { key: 'DRIVING', icon: '🚗', label: 'Drive' },
+];
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const MINI_W = Math.round(SCREEN_WIDTH * 0.72);
@@ -28,6 +37,20 @@ const FULL_DELTA = 0.003;
  */
 export default function MapOutput({ map }) {
   const [expanded, setExpanded] = useState(false);
+  const [mode, setMode] = useState('WALKING');
+  const [eta, setEta] = useState(null);
+  const [userLoc, setUserLoc] = useState(null);
+  const mapRef = useRef(null);
+
+  // Grab the user's position when the full map opens (for routing)
+  useEffect(() => {
+    if (expanded) {
+      getCurrentLocation().then(setUserLoc);
+    } else {
+      setEta(null);
+    }
+  }, [expanded]);
+
   const label = map.label;
   // Coordinates may arrive as strings from the backend LLM; the map silently
   // shows a default region unless they are real numbers.
@@ -97,6 +120,7 @@ export default function MapOutput({ map }) {
 
         {/* Map fills the entire screen */}
         <MapView
+          ref={mapRef}
           style={StyleSheet.absoluteFill}
           initialRegion={fullRegion}
           scrollEnabled
@@ -111,9 +135,33 @@ export default function MapOutput({ map }) {
             title={label}
             pinColor="#C8102E"
           />
+          {userLoc && (
+            <MapViewDirections
+              origin={{ latitude: userLoc.lat, longitude: userLoc.lng }}
+              destination={{ latitude: lat, longitude: lng }}
+              apikey={GOOGLE_MAPS_API_KEY}
+              mode={mode}
+              strokeWidth={4}
+              strokeColor="#C8102E"
+              onReady={(result) => {
+                setEta({
+                  minutes: Math.max(1, Math.round(result.duration)),
+                  miles: (result.distance * 0.621371).toFixed(1),
+                });
+                mapRef.current?.fitToCoordinates(result.coordinates, {
+                  edgePadding: { top: 140, bottom: 190, left: 60, right: 60 },
+                  animated: true,
+                });
+              }}
+              onError={(error) => {
+                console.error('Directions error:', error);
+                setEta(null);
+              }}
+            />
+          )}
         </MapView>
 
-        {/* Location label pinned to top */}
+        {/* Location label + route controls pinned to top */}
         <SafeAreaView style={styles.topBar} pointerEvents="box-none">
           <View style={styles.locationPill}>
             <Text style={styles.locationPillPin}>📍</Text>
@@ -121,6 +169,44 @@ export default function MapOutput({ map }) {
               {label}
             </Text>
           </View>
+
+          {userLoc ? (
+            <View style={styles.routeBar}>
+              <View style={styles.modeToggle}>
+                {MODES.map((m) => (
+                  <TouchableOpacity
+                    key={m.key}
+                    style={[styles.modeBtn, mode === m.key && styles.modeBtnActive]}
+                    onPress={() => {
+                      if (mode !== m.key) {
+                        setMode(m.key);
+                        setEta(null);
+                      }
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Route by ${m.label.toLowerCase()}`}
+                  >
+                    <Text
+                      style={[styles.modeBtnText, mode === m.key && styles.modeBtnTextActive]}
+                    >
+                      {m.icon} {m.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {eta && (
+                <View style={styles.etaPill}>
+                  <Text style={styles.etaText}>
+                    {mode === 'WALKING' ? '🚶' : '🚗'} {eta.minutes} min · {eta.miles} mi
+                  </Text>
+                </View>
+              )}
+            </View>
+          ) : (
+            <View style={styles.etaPill}>
+              <Text style={styles.etaText}>Enable location for directions</Text>
+            </View>
+          )}
         </SafeAreaView>
 
         {/* Back-to-chat tab pinned to bottom */}
@@ -218,6 +304,57 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1a1a1a',
     flexShrink: 1,
+  },
+
+  /* ── Route controls (mode toggle + ETA) ── */
+  routeBar: {
+    alignItems: 'center',
+    marginTop: 8,
+    gap: 8,
+  },
+  modeToggle: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255,255,255,0.93)',
+    borderRadius: 20,
+    padding: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  modeBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 17,
+  },
+  modeBtnActive: {
+    backgroundColor: '#C8102E',
+  },
+  modeBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#65575A',
+  },
+  modeBtnTextActive: {
+    color: '#fff',
+  },
+  etaPill: {
+    backgroundColor: 'rgba(255,255,255,0.93)',
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    marginTop: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  etaText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1a1a1a',
   },
 
   /* ── Bottom back-to-chat tab ── */
