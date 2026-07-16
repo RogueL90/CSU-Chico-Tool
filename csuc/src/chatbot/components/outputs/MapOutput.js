@@ -434,7 +434,6 @@ export default function MapOutput({ map }) {
           pitchEnabled
           showsCompass
           showsBuildings
-          showsTraffic={navMode && mode === 'DRIVING'}
           mapPadding={{ top: 0, right: 0, bottom: navMode ? 100 : 240, left: 0 }}
           onPanDrag={navMode ? () => setFollowSuspended(true) : undefined}
         >
@@ -458,17 +457,19 @@ export default function MapOutput({ map }) {
               </View>
             </Marker>
           )}
-          {/* Alternate routes (gray, tappable) under the selected one */}
-          {!navMode &&
-            routes.map((route, i) =>
+          {/* Alternate routes (gray, tappable) under the selected one.
+              Kept mounted during navigation (just made invisible) —
+              unmounting overlays mid-session blanks the Google renderer
+              on iOS, which used to eat the route line on Start. */}
+          {routes.map((route, i) =>
             i === selectedIdx || route.coordinates.length < 2 ? null : (
               <Polyline
                 key={`alt-${i}`}
                 coordinates={route.coordinates}
-                strokeColor="#9AA0A6"
+                strokeColor={navMode ? 'transparent' : '#9AA0A6'}
                 strokeWidth={4}
-                tappable
-                onPress={() => setSelectedIdx(i)}
+                tappable={!navMode}
+                onPress={() => !navMode && setSelectedIdx(i)}
                 zIndex={1}
               />
             )
@@ -481,9 +482,9 @@ export default function MapOutput({ map }) {
               zIndex={2}
             />
           )}
-          {/* ETA bubbles on alternates: tap to switch */}
-          {!navMode &&
-            routes.map((route, i) => {
+          {/* ETA bubbles on alternates: tap to switch. Hidden (not
+              unmounted) during navigation — see comment on alternates. */}
+          {routes.map((route, i) => {
             if (i === selectedIdx || !route.coordinates.length) return null;
             const mid = route.coordinates[Math.floor(route.coordinates.length / 2)];
             const diff = Math.round(route.minutes - (selectedRoute?.minutes ?? 0));
@@ -493,7 +494,8 @@ export default function MapOutput({ map }) {
                 coordinate={mid}
                 anchor={{ x: 0.5, y: 0.5 }}
                 zIndex={5}
-                onPress={() => setSelectedIdx(i)}
+                opacity={navMode ? 0 : 1}
+                onPress={() => !navMode && setSelectedIdx(i)}
               >
                 <View style={styles.etaBubble}>
                   <Text style={styles.etaBubbleText}>
