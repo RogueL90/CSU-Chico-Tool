@@ -9,7 +9,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
-  Keyboard,
   Linking,
   Alert,
   ActivityIndicator,
@@ -121,6 +120,34 @@ function TypingIndicator() {
   );
 }
 
+function LoadingPlaceholder() {
+  const shimmer = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animation = Animated.loop(Animated.sequence([
+      Animated.timing(shimmer, { toValue: 1, duration: 950, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      Animated.timing(shimmer, { toValue: 0, duration: 950, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+    ]));
+    animation.start();
+    return () => animation.stop();
+  }, [shimmer]);
+
+  const shimmerStyle = {
+    opacity: shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.38, 0.72] }),
+    transform: [{ translateX: shimmer.interpolate({ inputRange: [0, 1], outputRange: [-3, 3] }) }],
+  };
+
+  return (
+    <View pointerEvents="none">
+      <TypingIndicator />
+      <View style={styles.placeholderWrap} accessibilityLabel="Willie is preparing an answer">
+        <Animated.View style={[styles.placeholderLine, shimmerStyle]} />
+        <Animated.View style={[styles.placeholderLine, styles.placeholderLineShort, shimmerStyle]} />
+      </View>
+    </View>
+  );
+}
+
 function AnimatedChoice({ choice, index, selected, onPress, disabled }) {
   const entrance = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -151,7 +178,7 @@ function AnimatedChoice({ choice, index, selected, onPress, disabled }) {
   );
 }
 
-function FloatingCallCard({ phone, onCall }) {
+function FloatingCallCard({ phone, onCall, onDismiss }) {
   const [displayedPhone, setDisplayedPhone] = useState(phone);
   const [buttonPressed, setButtonPressed] = useState(false);
   const entrance = useRef(new Animated.Value(0)).current;
@@ -198,25 +225,36 @@ function FloatingCallCard({ phone, onCall }) {
       opacity: entrance,
       transform: [{ translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }],
     }]}>
-      <ScalePressable
-        style={styles.callBar}
-        onPress={() => onCall(displayedPhone.number)}
-        onPressIn={() => setButtonPressed(true)}
-        onPressOut={() => setButtonPressed(false)}
-        activeOpacity={0.9}
-        accessibilityRole="button"
-        accessibilityLabel={`Call ${displayedPhone.label}`}
-      >
+      <View style={styles.callBar}>
         <View style={styles.callBarLeft}>
           <View>
             <Text style={styles.callBarLabel}>Call {displayedPhone.label}</Text>
             <Text style={styles.callBarNumber}>{formattedPhone}</Text>
           </View>
         </View>
-        <View style={[styles.callBarBtn, buttonPressed && styles.callBarBtnPressed]}>
-          <Text style={styles.callBarBtnTxt}>Call</Text>
+        <View style={styles.callBarActions}>
+          <TouchableOpacity
+            style={styles.callDismissBtn}
+            onPress={onDismiss}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss contact"
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={styles.callDismissText}>×</Text>
+          </TouchableOpacity>
+          <ScalePressable
+            style={[styles.callBarBtn, buttonPressed && styles.callBarBtnPressed]}
+            onPress={() => onCall(displayedPhone.number)}
+            onPressIn={() => setButtonPressed(true)}
+            onPressOut={() => setButtonPressed(false)}
+            activeOpacity={0.9}
+            accessibilityRole="button"
+            accessibilityLabel={`Call ${displayedPhone.label}`}
+          >
+            <Text style={styles.callBarBtnTxt}>Call</Text>
+          </ScalePressable>
         </View>
-      </ScalePressable>
+      </View>
     </Animated.View>
   );
 }
@@ -264,6 +302,7 @@ async function askBackend(query, conversationHistory = [], userLocation = null) 
 // ─── ChatScreen ───────────────────────────────────────────────────────────────
 export default function ChatScreen() {
   const listRef = useRef(null);
+  const inputRef = useRef(null);
   const [inputText, setInputText] = useState('');
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -271,6 +310,7 @@ export default function ChatScreen() {
   const [followUpChoices, setFollowUpChoices] = useState(null);
   const [selectedChoiceId, setSelectedChoiceId] = useState(null);
   const [showWelcome, setShowWelcome] = useState(true);
+  const [inputFocused, setInputFocused] = useState(false);
   const welcomeAnim = useRef(new Animated.Value(1)).current;
   const sendEnabledAnim = useRef(new Animated.Value(0)).current;
   const restartAnim = useRef(new Animated.Value(0)).current;
@@ -329,7 +369,10 @@ export default function ChatScreen() {
 
     // Phone → persistent bar
     if (data.phone && data.output_types.includes('phone')) {
-      setPersistentPhone({ number: data.phone, label: 'Suggested Contact' });
+      setPersistentPhone({
+        number: data.phone,
+        label: data.phone_label || data.map?.label || 'Campus Office',
+      });
     }
 
     // If low confidence → show follow-up choices
@@ -411,10 +454,11 @@ export default function ChatScreen() {
   const handleSend = useCallback(() => {
     const text = inputText.trim();
     if (!text || loading) return;
-    Keyboard.dismiss();
+    inputRef.current?.clear();
     setInputText('');
+    composerHeight.setValue(40);
     sendQuery(text);
-  }, [inputText, loading, sendQuery]);
+  }, [inputText, loading, sendQuery, composerHeight]);
 
   // ── Handle follow-up chip press ───────────────────────────────────────────
   const handleChip = useCallback((choice) => {
@@ -531,16 +575,21 @@ export default function ChatScreen() {
               </View>
             </Animated.View>
           ) : null}
-          ListFooterComponent={loading ? <TypingIndicator /> : null}
+          ListFooterComponent={loading ? <LoadingPlaceholder /> : null}
           onContentSizeChange={() =>
             listRef.current?.scrollToEnd({ animated: true })
           }
-          keyboardShouldPersistTaps="handled"
+          keyboardShouldPersistTaps="always"
+          keyboardDismissMode="none"
           showsVerticalScrollIndicator={false}
         />
 
         {/* ── Persistent call bar ── */}
-        <FloatingCallCard phone={persistentPhone} onCall={dialNumber} />
+        <FloatingCallCard
+          phone={persistentPhone}
+          onCall={dialNumber}
+          onDismiss={() => setPersistentPhone(null)}
+        />
 
         {/* ── Follow-up choice chips (confidence < 80) ── */}
         {followUpChoices && (
@@ -560,12 +609,21 @@ export default function ChatScreen() {
 
         {/* ── Input bar — always visible ── */}
         <View style={styles.inputBar}>
-          <Animated.View style={[styles.inputWrap, { height: composerHeight }]}>
+          <Animated.View style={[
+            styles.inputWrap,
+            inputFocused && styles.inputWrapFocused,
+            { height: composerHeight },
+          ]}
+            onTouchEnd={() => inputRef.current?.focus()}
+          >
           <TextInput
+            ref={inputRef}
             style={styles.input}
             value={inputText}
             onChangeText={setInputText}
             onContentSizeChange={handleComposerSizeChange}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
             placeholder={followUpChoices ? 'Other…' : 'Call Willie for help…'}
             placeholderTextColor="#8D7C7F"
             returnKeyType="send"
@@ -573,7 +631,8 @@ export default function ChatScreen() {
             multiline
             submitBehavior="submit"
             textAlignVertical="center"
-            editable={!loading}
+            editable={true}
+            readOnly={false}
             accessibilityLabel="Type your question"
           />
           </Animated.View>
@@ -648,6 +707,9 @@ const styles = StyleSheet.create({
   typingPaw: { fontSize: 14 },
   typingBubble: { height: 34, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 13, backgroundColor: '#fff', borderWidth: 1, borderColor: '#F0DDDE', borderRadius: 17, borderBottomLeftRadius: 5 },
   typingDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#C8102E' },
+  placeholderWrap: { marginLeft: 54, marginRight: 16, marginBottom: 10, gap: 8 },
+  placeholderLine: { height: 10, borderRadius: 5, backgroundColor: '#EBCFD3', width: '92%' },
+  placeholderLineShort: { width: '64%' },
 
   // Floating persistent call card
   callCardWrap: { marginHorizontal: 12, marginBottom: 4, shadowColor: '#4A0010', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.2, shadowRadius: 14, elevation: 6 },
@@ -663,6 +725,9 @@ const styles = StyleSheet.create({
     borderColor: '#A90D27',
   },
   callBarLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  callBarActions: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  callDismissBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.14)' },
+  callDismissText: { color: '#FFFFFF', fontSize: 23, lineHeight: 25, fontWeight: '400' },
   callBarLabel: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
   callBarNumber: { color: 'rgba(255,255,255,0.82)', fontSize: 12, marginTop: 1 },
   callBarBtn: {
@@ -711,6 +776,8 @@ const styles = StyleSheet.create({
     borderTopColor: '#F0DCDD',
     backgroundColor: '#FFF9F6',
     gap: 8,
+    zIndex: 20,
+    elevation: 8,
   },
   inputWrap: {
     flex: 1,
@@ -720,6 +787,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     overflow: 'hidden',
   },
+  inputWrapFocused: { borderColor: '#C8102E', borderWidth: 1.5, shadowColor: '#C8102E', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.12, shadowRadius: 5, elevation: 2 },
   input: {
     flex: 1,
     paddingHorizontal: 16,

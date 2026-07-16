@@ -51,6 +51,30 @@ const MODES = [
   { key: 'DRIVING', label: 'Drive' },
 ];
 
+const AnimatedTouchableOpacity = Animated.createAnimatedComponent(TouchableOpacity);
+
+function MapPressable({ style, onPressIn, onPressOut, children, ...props }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const animateScale = (toValue, spring = false) => {
+    const config = { toValue, useNativeDriver: true };
+    (spring
+      ? Animated.spring(scale, { ...config, speed: 28, bounciness: 4 })
+      : Animated.timing(scale, { ...config, duration: 90, easing: Easing.out(Easing.quad) })
+    ).start();
+  };
+
+  return (
+    <AnimatedTouchableOpacity
+      {...props}
+      style={[style, { transform: [{ scale }] }]}
+      onPressIn={(event) => { animateScale(0.97); onPressIn?.(event); }}
+      onPressOut={(event) => { animateScale(1, true); onPressOut?.(event); }}
+    >
+      {children}
+    </AnimatedTouchableOpacity>
+  );
+}
+
 /**
  * Format a duration in minutes as a clean human-readable string:
  * 45 -> "45 min", 328 -> "5 hr 28 min", 1500 -> "1 d 1 hr"
@@ -104,6 +128,7 @@ export default function MapOutput({ map }) {
   const mapRef = useRef(null);
   const sheetTranslateY = useRef(new Animated.Value(SHEET_H)).current;
   const mapTransition = useRef(new Animated.Value(0)).current;
+  const recenterRotation = useRef(new Animated.Value(0)).current;
   // Which snap point the sheet is resting at: 'collapsed' | 'expanded'
   const snapRef = useRef('collapsed');
 
@@ -154,6 +179,27 @@ export default function MapOutput({ map }) {
         useNativeDriver: true,
       }).start();
     });
+  };
+
+  const recenterMap = () => {
+    recenterRotation.setValue(0);
+    Animated.spring(recenterRotation, {
+      toValue: 1,
+      speed: 22,
+      bounciness: 5,
+      useNativeDriver: true,
+    }).start();
+    if (liveLoc) {
+      mapRef.current?.animateToRegion(
+        {
+          latitude: liveLoc.lat,
+          longitude: liveLoc.lng,
+          latitudeDelta: FULL_DELTA,
+          longitudeDelta: FULL_DELTA,
+        },
+        350
+      );
+    }
   };
 
   // Drag between snap points: collapsed <-> expanded, or down to dismiss.
@@ -413,7 +459,7 @@ export default function MapOutput({ map }) {
   return (
     <View style={styles.wrapper}>
       {/* ── Mini map card (non-interactive, tappable) ── */}
-      <TouchableOpacity
+      <MapPressable
         style={styles.miniCard}
         onPress={openMap}
         activeOpacity={0.9}
@@ -450,7 +496,7 @@ export default function MapOutput({ map }) {
           </View>
           <Text style={styles.miniChevron}>›</Text>
         </View>
-      </TouchableOpacity>
+      </MapPressable>
 
       {/* ── Full-screen modal ── */}
       <Modal
@@ -552,14 +598,14 @@ export default function MapOutput({ map }) {
         {/* ── Navigation overlays ── */}
         {navMode && <NavBanner step={currentStep} distanceText={distToManeuver} />}
         {navMode && followSuspended && (
-          <TouchableOpacity
+          <MapPressable
             style={styles.recenterChip}
             onPress={() => setFollowSuspended(false)}
             accessibilityRole="button"
             accessibilityLabel="Resume following my location"
           >
             <Text style={styles.recenterChipText}>◎ Re-center</Text>
-          </TouchableOpacity>
+          </MapPressable>
         )}
         {navMode && (
           <View style={styles.navBar}>
@@ -571,14 +617,14 @@ export default function MapOutput({ map }) {
                 {remaining ? metersToDisplay(remaining.meters) : ''}
               </Text>
             </View>
-            <TouchableOpacity
+            <MapPressable
               style={styles.exitBtn}
               onPress={exitNavigation}
               accessibilityRole="button"
               accessibilityLabel="Exit navigation"
             >
               <Text style={styles.exitBtnText}>Exit</Text>
-            </TouchableOpacity>
+            </MapPressable>
           </View>
         )}
 
@@ -606,7 +652,7 @@ export default function MapOutput({ map }) {
           {/* Mode segmented control + recenter */}
           <View style={styles.segment}>
             {MODES.map((m) => (
-              <TouchableOpacity
+              <MapPressable
                 key={m.key}
                 style={[styles.segmentBtn, mode === m.key && styles.segmentBtnActive]}
                 onPress={() => {
@@ -629,27 +675,19 @@ export default function MapOutput({ map }) {
                 >
                   {m.label}
                 </Text>
-              </TouchableOpacity>
+              </MapPressable>
             ))}
             {liveLoc && (
-              <TouchableOpacity
+              <MapPressable
                 style={styles.recenterBtn}
-                onPress={() =>
-                  mapRef.current?.animateToRegion(
-                    {
-                      latitude: liveLoc.lat,
-                      longitude: liveLoc.lng,
-                      latitudeDelta: FULL_DELTA,
-                      longitudeDelta: FULL_DELTA,
-                    },
-                    350
-                  )
-                }
+                onPress={recenterMap}
                 accessibilityRole="button"
                 accessibilityLabel="Center map on my location"
               >
-                <Text style={styles.recenterIcon}>◎</Text>
-              </TouchableOpacity>
+                <Animated.Text style={[styles.recenterIcon, {
+                  transform: [{ rotate: recenterRotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '300deg'] }) }],
+                }]}>◎</Animated.Text>
+              </MapPressable>
             )}
           </View>
 
@@ -674,7 +712,7 @@ export default function MapOutput({ map }) {
 
           {/* Actions: back to chat + start navigation */}
           <View style={styles.btnRow}>
-            <TouchableOpacity
+            <MapPressable
               style={styles.backBtn}
               onPress={closeMap}
               activeOpacity={0.85}
@@ -682,9 +720,9 @@ export default function MapOutput({ map }) {
               accessibilityLabel="Back to chat"
             >
               <Text style={styles.backBtnText}>Back to Chat</Text>
-            </TouchableOpacity>
+            </MapPressable>
             {selectedRoute && liveLoc && (
-              <TouchableOpacity
+              <MapPressable
                 style={styles.startBtn}
                 onPress={startNavigation}
                 activeOpacity={0.85}
@@ -692,7 +730,7 @@ export default function MapOutput({ map }) {
                 accessibilityLabel="Start navigation"
               >
                 <Text style={styles.startBtnText}>Start</Text>
-              </TouchableOpacity>
+              </MapPressable>
             )}
           </View>
 

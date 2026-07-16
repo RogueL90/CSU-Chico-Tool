@@ -59,6 +59,7 @@ Always return ONLY a valid JSON object with this structure:
 {
   "text": "<clear student-facing answer or null if clarifying>",
   "phone": "<10-digit number or null>",
+  "phone_label": "<name of the office or service that owns the number, or null>",
   "map": {"label": "...", "lat": ..., "lng": ..., "address": "..."} or null,
   "output_types": ["text", "map", "phone"],
   "needs_clarification": true or false,
@@ -325,6 +326,9 @@ def sanitize_response(parsed: dict) -> dict:
 
     map_data = parsed.get("map")
     phone_candidate = parsed.get("phone")
+    phone_label = strip_reflection_tags(
+        parsed.get("phone_label") or parsed.get("phoneLabel")
+    )
     outputs = parsed.get("outputs")
     if isinstance(outputs, list):
         for output in outputs:
@@ -332,13 +336,18 @@ def sanitize_response(parsed: dict) -> dict:
                 continue
             if output.get("type") == "map" and map_data is None:
                 map_data = output
-            elif output.get("type") == "phone" and not phone_candidate:
-                phone_candidate = output.get("phone")
+            elif output.get("type") == "phone":
+                phone_candidate = phone_candidate or output.get("phone")
+                phone_label = phone_label or strip_reflection_tags(
+                    output.get("label") or output.get("name")
+                )
             elif output.get("type") == "text" and not text:
                 text = strip_reflection_tags(output.get("text"))
 
     map_data = sanitize_map(map_data)
     phone = extract_phone(text, phone_candidate)
+    if phone and not phone_label and map_data:
+        phone_label = map_data.get("label")
     needs_clarification = bool(
         parsed.get("needs_clarification", parsed.get("needsClarification", False))
     )
@@ -362,6 +371,7 @@ def sanitize_response(parsed: dict) -> dict:
             "confidence": 30,
             "text": text,
             "phone": None,
+            "phone_label": None,
             "map": None,
             "output_types": ["text"] if text else [],
             "follow_up_choices": choices,
@@ -384,6 +394,7 @@ def sanitize_response(parsed: dict) -> dict:
         "confidence": 90,
         "text": text,
         "phone": phone,
+        "phone_label": phone_label if phone else None,
         "map": map_data,
         "output_types": output_types,
         "follow_up_choices": None,
@@ -437,6 +448,7 @@ async def process_query(
         "confidence": 90,
         "text": clean_text,
         "phone": phone,
+        "phone_label": None,
         "map": None,
         "output_types": output_types,
         "follow_up_choices": None,

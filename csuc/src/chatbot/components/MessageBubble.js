@@ -22,16 +22,25 @@ import BotMarkdown from './BotMarkdown';
  * Neither belongs inside a message bubble.
  */
 export default function MessageBubble({ message }) {
-  const entrance = useRef(new Animated.Value(0)).current;
+  const entranceOpacity = useRef(new Animated.Value(0)).current;
+  const entranceMotion = useRef(new Animated.Value(0)).current;
   const successPulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    Animated.timing(entrance, {
-      toValue: 1,
-      duration: 220,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
+    Animated.parallel([
+      Animated.timing(entranceOpacity, {
+        toValue: 1,
+        duration: 190,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.spring(entranceMotion, {
+        toValue: 1,
+        speed: 22,
+        bounciness: 5,
+        useNativeDriver: true,
+      }),
+    ]).start();
 
     if (message.type === 'result') {
       Animated.sequence([
@@ -50,19 +59,24 @@ export default function MessageBubble({ message }) {
         }),
       ]).start();
     }
-  }, [entrance, successPulse, message.type]);
+  }, [entranceOpacity, entranceMotion, successPulse, message.type]);
 
   const entranceStyle = {
-    opacity: entrance,
+    opacity: entranceOpacity,
     transform: [{
       translateX: message.role === 'user'
-        ? entrance.interpolate({ inputRange: [0, 1], outputRange: [10, 0] })
+        ? entranceMotion.interpolate({ inputRange: [0, 1], outputRange: [12, 0] })
         : 0,
     }, {
       translateY: message.role === 'bot'
-        ? entrance.interpolate({ inputRange: [0, 1], outputRange: [8, 0] })
+        ? entranceMotion.interpolate({ inputRange: [0, 1], outputRange: [10, 0] })
         : 0,
-    }, { scale: successPulse }],
+    }, {
+      scale: Animated.multiply(
+        entranceMotion.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] }),
+        successPulse
+      ),
+    }],
   };
 
   // ── User bubble ───────────────────────────────────────────────────────────
