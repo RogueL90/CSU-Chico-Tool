@@ -21,7 +21,12 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-status-bar"
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Willie uses your location to show nearby campus places."
+        }
+      ]
     ]
   }
 }

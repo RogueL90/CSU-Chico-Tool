@@ -14,10 +14,26 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import Constants from 'expo-constants';
 import MessageBubble from './components/MessageBubble';
+import { getCurrentLocation } from '../../maps-api/location';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const BACKEND_URL = 'http://localhost:8000';
+// Backend URL resolution:
+// 1. EXPO_PUBLIC_BACKEND_URL in .env (required when using tunnel mode)
+// 2. The host the app bundle was served from (your Mac's LAN IP) on port 8000
+// 3. localhost (works on simulators only)
+function resolveBackendUrl() {
+  if (process.env.EXPO_PUBLIC_BACKEND_URL) {
+    return process.env.EXPO_PUBLIC_BACKEND_URL;
+  }
+  const host = Constants.expoConfig?.hostUri?.split(':')[0];
+  if (host && !host.includes('exp.direct')) {
+    return `http://${host}:8000`;
+  }
+  return 'http://localhost:8000';
+}
+const BACKEND_URL = resolveBackendUrl();
 const GREETING = "I'm Willie, and I'm here to help you find the right campus office or service and point you in the right direction.";
 const STARTER_QUESTIONS = ['Add/drop date', 'Advising', 'Dining hours'];
 
@@ -43,13 +59,14 @@ async function dialNumber(phoneNumber) {
 /**
  * Call the Strands backend /ask endpoint.
  */
-async function askBackend(query, conversationHistory = []) {
+async function askBackend(query, conversationHistory = [], userLocation = null) {
   const response = await fetch(`${BACKEND_URL}/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       query,
       conversation_history: conversationHistory,
+      user_location: userLocation,
     }),
   });
 
@@ -69,6 +86,7 @@ export default function ChatScreen() {
   const [persistentPhone, setPersistentPhone] = useState(null);
   const [followUpChoices, setFollowUpChoices] = useState(null);
   const conversationRef = useRef([]);
+  const locationRef = useRef(null);
 
   const pushMessages = useCallback((newMsgs) => {
     setMessages((prev) => [...prev, ...newMsgs]);
@@ -78,6 +96,13 @@ export default function ChatScreen() {
   // ── Greeting on mount ────────────────────────────────────────────────────
   useEffect(() => {
     setMessages([{ id: uid(), role: 'bot', type: 'text', text: GREETING }]);
+  }, []);
+
+  // ── Request location permission early and warm the GPS fix ────────────────
+  useEffect(() => {
+    getCurrentLocation().then((loc) => {
+      locationRef.current = loc;
+    });
   }, []);
 
   // ── Process structured backend response ───────────────────────────────────
@@ -138,7 +163,11 @@ export default function ChatScreen() {
     conversationRef.current.push({ role: 'user', text: userText });
 
     try {
-      const data = await askBackend(userText, conversationRef.current);
+      // Refresh location (fast: last-known fix) so proximity questions work
+      const location = await getCurrentLocation();
+      if (location) locationRef.current = location;
+
+      const data = await askBackend(userText, conversationRef.current, locationRef.current);
 
       // Track bot response in conversation
       if (data.text) {

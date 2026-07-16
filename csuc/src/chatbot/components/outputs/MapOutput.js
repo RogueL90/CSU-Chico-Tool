@@ -63,6 +63,7 @@ export default function MapOutput({ map }) {
           pitchEnabled={false}
           pointerEvents="none"
           liteMode={true}
+          showsUserLocation
         >
           <Marker coordinate={{ latitude: lat, longitude: lng }} title={label} />
         </MapView>
