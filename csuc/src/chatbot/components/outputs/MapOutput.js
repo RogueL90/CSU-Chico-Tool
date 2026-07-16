@@ -28,7 +28,13 @@ const FULL_DELTA = 0.003;
  */
 export default function MapOutput({ map }) {
   const [expanded, setExpanded] = useState(false);
-  const { lat, lng, label } = map;
+  const label = map.label;
+  // Coordinates may arrive as strings from the backend LLM; the map silently
+  // shows a default region unless they are real numbers.
+  const lat = Number(map.lat);
+  const lng = Number(map.lng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
 
   const miniRegion = {
     latitude: lat,
@@ -56,7 +62,7 @@ export default function MapOutput({ map }) {
       >
         <MapView
           style={{ width: MINI_W, height: MINI_H }}
-          initialRegion={miniRegion}
+          region={miniRegion}
           scrollEnabled={false}
           zoomEnabled={false}
           rotateEnabled={false}
