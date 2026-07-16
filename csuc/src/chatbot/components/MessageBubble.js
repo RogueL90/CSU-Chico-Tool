@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, View, Text, StyleSheet } from 'react-native';
+import React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 import TextOutput from './outputs/TextOutput';
 import MapOutput from './outputs/MapOutput';
 import BotMarkdown from './BotMarkdown';
@@ -22,44 +22,20 @@ import BotMarkdown from './BotMarkdown';
  * Neither belongs inside a message bubble.
  */
 export default function MessageBubble({ message }) {
-  const entrance = useRef(new Animated.Value(0)).current;
-
-  // Quick fade-slide — fast enough to never feel like waiting.
-  useEffect(() => {
-    Animated.timing(entrance, {
-      toValue: 1,
-      duration: 160,
-      easing: Easing.out(Easing.quad),
-      useNativeDriver: true,
-    }).start();
-  }, [entrance]);
-
-  const entranceStyle = {
-    opacity: entrance,
-    transform: [
-      {
-        translateY: entrance.interpolate({
-          inputRange: [0, 1],
-          outputRange: [8, 0],
-        }),
-      },
-    ],
-  };
-
   // ── User bubble ───────────────────────────────────────────────────────────
   if (message.role === 'user') {
     return (
-      <Animated.View style={[styles.userRow, entranceStyle]}>
+      <View style={styles.userRow}>
         <View style={styles.userBubble}>
           <Text style={styles.userText}>{message.text}</Text>
         </View>
-      </Animated.View>
+      </View>
     );
   }
 
   // ── Bot message ───────────────────────────────────────────────────────────
   return (
-    <Animated.View style={[styles.botRow, entranceStyle]}>
+    <View style={styles.botRow}>
       <View style={styles.avatar}>
         <Text style={styles.avatarEmoji}>🐾</Text>
       </View>
@@ -80,7 +56,7 @@ export default function MessageBubble({ message }) {
           </View>
         )}
       </View>
-    </Animated.View>
+    </View>
   );
 }
 

@@ -13,6 +13,8 @@ import {
   Linking,
   Alert,
   ActivityIndicator,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import Constants from 'expo-constants';
 import MessageBubble from './components/MessageBubble';
@@ -36,6 +38,29 @@ function resolveBackendUrl() {
 const BACKEND_URL = resolveBackendUrl();
 const GREETING = "I'm Willie, and I'm here to help you find the right campus office or service and point you in the right direction.";
 const STARTER_QUESTIONS = ['Add/drop date', 'Advising', 'Dining hall'];
+
+if (Platform.OS === 'android') {
+  UIManager.setLayoutAnimationEnabledExperimental?.(true);
+}
+
+const ACCESSORY_TRANSITION = {
+  duration: 220,
+  create: {
+    type: LayoutAnimation.Types.easeInEaseOut,
+    property: LayoutAnimation.Properties.opacity,
+  },
+  update: {
+    type: LayoutAnimation.Types.easeInEaseOut,
+  },
+  delete: {
+    type: LayoutAnimation.Types.easeInEaseOut,
+    property: LayoutAnimation.Properties.opacity,
+  },
+};
+
+function animateAccessoryTransition() {
+  LayoutAnimation.configureNext(ACCESSORY_TRANSITION);
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 let _id = 0;
@@ -107,6 +132,8 @@ export default function ChatScreen() {
 
   // ── Process structured backend response ───────────────────────────────────
   const handleBackendResponse = useCallback((data) => {
+    animateAccessoryTransition();
+
     // Clear any existing follow-up choices
     setFollowUpChoices(null);
 
@@ -156,6 +183,7 @@ export default function ChatScreen() {
   const sendQuery = useCallback(async (userText) => {
     const userMsg = { id: uid(), role: 'user', type: 'text', text: userText };
     pushMessages([userMsg]);
+    if (followUpChoices) animateAccessoryTransition();
     setFollowUpChoices(null);
     setLoading(true);
 
@@ -186,7 +214,7 @@ export default function ChatScreen() {
     } finally {
       setLoading(false);
     }
-  }, [pushMessages, handleBackendResponse]);
+  }, [pushMessages, handleBackendResponse, followUpChoices]);
 
   // ── Handle bottom-bar send ────────────────────────────────────────────────
   const handleSend = useCallback(() => {
@@ -200,6 +228,7 @@ export default function ChatScreen() {
   // ── Handle follow-up chip press ───────────────────────────────────────────
   const handleChip = useCallback((choice) => {
     if (loading) return;
+    animateAccessoryTransition();
     setFollowUpChoices(null);
     sendQuery(choice.label);
   }, [loading, sendQuery]);
@@ -207,6 +236,7 @@ export default function ChatScreen() {
   // ── Restart ───────────────────────────────────────────────────────────────
   const handleRestart = useCallback(() => {
     _id = 0;
+    animateAccessoryTransition();
     setPersistentPhone(null);
     setFollowUpChoices(null);
     setInputText('');

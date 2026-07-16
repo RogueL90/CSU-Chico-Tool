@@ -1,102 +1,80 @@
 import React from 'react';
-import { StyleSheet } from 'react-native';
-import Markdown from 'react-native-markdown-display';
+import { StyleSheet, Text, View } from 'react-native';
 
 /**
- * Shared markdown renderer for bot messages — bold, bullet lists, links,
- * inline code — styled to match the chat theme. Links open via Linking
- * (the library's default).
- *
- * Props:
- *   text - markdown string
+ * Lightweight bot-text renderer using only React Native views and styles.
+ * Supports paragraphs, simple headings, bullets, numbered lists, and **bold**.
  */
 export default function BotMarkdown({ text }) {
   if (!text) return null;
-  return <Markdown style={mdStyles}>{text}</Markdown>;
+
+  return (
+    <View style={styles.body}>
+      {String(text).split('\n').map((line, index) => (
+        <StyledLine key={`${index}-${line}`} line={line} />
+      ))}
+    </View>
+  );
 }
 
-const mdStyles = StyleSheet.create({
-  body: {
-    fontSize: 15,
-    lineHeight: 22,
-    color: '#2C2022',
-  },
-  paragraph: {
-    marginTop: 0,
-    marginBottom: 8,
-  },
-  strong: {
-    fontWeight: '700',
-  },
-  link: {
-    color: '#C8102E',
-    textDecorationLine: 'underline',
-    fontWeight: '600',
-  },
-  bullet_list: {
-    marginBottom: 8,
-  },
-  ordered_list: {
-    marginBottom: 8,
-  },
-  list_item: {
-    marginBottom: 4,
-    flexDirection: 'row',
-  },
-  bullet_list_icon: {
-    color: '#C8102E',
-    marginRight: 8,
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  ordered_list_icon: {
-    color: '#C8102E',
-    marginRight: 8,
-    fontSize: 15,
-    lineHeight: 22,
-    fontWeight: '700',
-  },
-  code_inline: {
-    backgroundColor: '#F6F6F6',
-    borderRadius: 4,
-    paddingHorizontal: 4,
-    fontFamily: 'Courier',
-    fontSize: 14,
-  },
-  code_block: {
-    backgroundColor: '#F6F6F6',
-    borderRadius: 8,
-    borderWidth: 0,
-    padding: 10,
-    fontFamily: 'Courier',
-    fontSize: 13,
-    marginBottom: 8,
-  },
-  fence: {
-    backgroundColor: '#F6F6F6',
-    borderRadius: 8,
-    borderWidth: 0,
-    padding: 10,
-    fontFamily: 'Courier',
-    fontSize: 13,
-    marginBottom: 8,
-  },
-  blockquote: {
-    backgroundColor: '#FFF7F3',
-    borderLeftWidth: 3,
-    borderLeftColor: '#C8102E',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    marginBottom: 8,
-  },
-  // Headings scaled for chat bubbles so a stray "#" doesn't blow up the layout
-  heading1: { fontSize: 18, fontWeight: '800', marginBottom: 6, color: '#1a1a1a' },
-  heading2: { fontSize: 17, fontWeight: '700', marginBottom: 6, color: '#1a1a1a' },
-  heading3: { fontSize: 16, fontWeight: '700', marginBottom: 4, color: '#1a1a1a' },
-  heading4: { fontSize: 15, fontWeight: '700', marginBottom: 4, color: '#1a1a1a' },
-  hr: {
-    backgroundColor: '#F0DDDE',
-    height: 1,
-    marginVertical: 8,
-  },
+function StyledLine({ line }) {
+  const heading = line.match(/^(#{1,4})\s+(.+)$/);
+  if (heading) {
+    return (
+      <Text style={[styles.text, styles.heading, styles[`heading${heading[1].length}`]]}>
+        {renderBold(heading[2])}
+      </Text>
+    );
+  }
+
+  const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+  if (bullet) {
+    return (
+      <View style={styles.listRow}>
+        <Text style={styles.bullet}>•</Text>
+        <Text style={[styles.text, styles.listText]}>{renderBold(bullet[1])}</Text>
+      </View>
+    );
+  }
+
+  const numbered = line.match(/^\s*(\d+)\.\s+(.+)$/);
+  if (numbered) {
+    return (
+      <View style={styles.listRow}>
+        <Text style={styles.number}>{numbered[1]}.</Text>
+        <Text style={[styles.text, styles.listText]}>{renderBold(numbered[2])}</Text>
+      </View>
+    );
+  }
+
+  if (!line.trim()) return <View style={styles.spacer} />;
+  return <Text style={[styles.text, styles.paragraph]}>{renderBold(line)}</Text>;
+}
+
+function renderBold(value) {
+  return value.split(/(\*\*[^*]+\*\*)/g).filter(Boolean).map((part, index) => {
+    const isBold = part.startsWith('**') && part.endsWith('**');
+    return (
+      <Text key={`${index}-${part}`} style={isBold ? styles.strong : undefined}>
+        {isBold ? part.slice(2, -2) : part}
+      </Text>
+    );
+  });
+}
+
+const styles = StyleSheet.create({
+  body: { width: '100%' },
+  text: { color: '#2C2022', fontSize: 15, lineHeight: 22 },
+  paragraph: { marginBottom: 5 },
+  strong: { fontWeight: '700' },
+  spacer: { height: 6 },
+  heading: { color: '#1A1A1A', fontWeight: '800', marginBottom: 6 },
+  heading1: { fontSize: 18 },
+  heading2: { fontSize: 17 },
+  heading3: { fontSize: 16 },
+  heading4: { fontSize: 15 },
+  listRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 4 },
+  bullet: { color: '#C8102E', fontSize: 17, lineHeight: 22, marginRight: 8 },
+  number: { color: '#C8102E', fontSize: 15, fontWeight: '700', lineHeight: 22, marginRight: 7 },
+  listText: { flex: 1 },
 });
