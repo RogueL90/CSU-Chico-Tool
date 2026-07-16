@@ -235,15 +235,13 @@ export default function MapOutput({ map }) {
 
       // Auto-zoom to show every route option once per open; after that
       // the user controls the camera.
-      if (result.length && !hasFitRef.current) {
+      const allCoords = result.flatMap((r) => r.coordinates);
+      if (allCoords.length && !hasFitRef.current) {
         hasFitRef.current = true;
-        mapRef.current?.fitToCoordinates(
-          result.flatMap((r) => r.coordinates),
-          {
-            edgePadding: { top: 120, bottom: 300, left: 60, right: 60 },
-            animated: true,
-          }
-        );
+        mapRef.current?.fitToCoordinates(allCoords, {
+          edgePadding: { top: 120, bottom: 300, left: 60, right: 60 },
+          animated: true,
+        });
       }
     });
 
@@ -363,7 +361,7 @@ export default function MapOutput({ map }) {
     setFollowSuspended(false);
     snapRef.current = 'collapsed';
     snapTo(COLLAPSED_OFFSET);
-    if (selectedRoute) {
+    if (selectedRoute?.coordinates.length) {
       mapRef.current?.fitToCoordinates(selectedRoute.coordinates, {
         edgePadding: { top: 120, bottom: 300, left: 60, right: 60 },
         animated: true,
@@ -436,7 +434,7 @@ export default function MapOutput({ map }) {
           pitchEnabled
           showsCompass
           showsBuildings
-          showsTraffic={mode === 'DRIVING'}
+          showsTraffic={navMode && mode === 'DRIVING'}
           mapPadding={{ top: 0, right: 0, bottom: navMode ? 100 : 240, left: 0 }}
           onPanDrag={navMode ? () => setFollowSuspended(true) : undefined}
         >
@@ -463,7 +461,7 @@ export default function MapOutput({ map }) {
           {/* Alternate routes (gray, tappable) under the selected one */}
           {!navMode &&
             routes.map((route, i) =>
-            i === selectedIdx ? null : (
+            i === selectedIdx || route.coordinates.length < 2 ? null : (
               <Polyline
                 key={`alt-${i}`}
                 coordinates={route.coordinates}
@@ -475,7 +473,7 @@ export default function MapOutput({ map }) {
               />
             )
           )}
-          {selectedRoute && (
+          {selectedRoute?.coordinates.length >= 2 && (
             <Polyline
               coordinates={selectedRoute.coordinates}
               strokeColor="#C8102E"
@@ -568,10 +566,11 @@ export default function MapOutput({ map }) {
                 key={m.key}
                 style={[styles.segmentBtn, mode === m.key && styles.segmentBtnActive]}
                 onPress={() => {
+                  // Keep the current route drawn while the new mode's routes
+                  // load — clearing overlays mid-switch blanks the Google
+                  // tile renderer on iOS.
                   if (mode !== m.key) {
                     setMode(m.key);
-                    setRoutes([]);
-                    setSelectedIdx(0);
                     setRouteError(false);
                   }
                 }}
