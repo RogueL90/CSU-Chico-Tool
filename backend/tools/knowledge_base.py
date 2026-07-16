@@ -31,34 +31,30 @@ def retrieve_from_kb(query: str) -> str:
     client = boto3.client("bedrock-agent-runtime", **client_kwargs)
 
     kb_id = os.environ.get("EXPO_PUBLIC_KNOWLEDGE_BASE_ID", "EVLCAIRVMQ")
-    model_arn = os.environ.get(
-        "EXPO_PUBLIC_MODEL_ARN",
-        "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-3-haiku-20240307-v1:0",
-    )
 
     try:
-        response = client.retrieve_and_generate(
-            input={"text": query},
-            retrieveAndGenerateConfiguration={
-                "type": "KNOWLEDGE_BASE",
-                "knowledgeBaseConfiguration": {
-                    "knowledgeBaseId": kb_id,
-                    "modelArn": model_arn,
-                },
+        # Pure vector search — no LLM generation here. The orchestrator
+        # writes the answer once from these passages (retrieve_and_generate
+        # would run a second, redundant generation).
+        response = client.retrieve(
+            knowledgeBaseId=kb_id,
+            retrievalQuery={"text": query},
+            retrievalConfiguration={
+                "vectorSearchConfiguration": {"numberOfResults": 4}
             },
         )
 
-        answer = response.get("output", {}).get("text", "")
-        citations = response.get("citations", [])
+        results = response.get("retrievalResults", [])
+        passages = []
+        for i, result in enumerate(results):
+            text = result.get("content", {}).get("text", "").strip()
+            if text:
+                passages.append(f"[{i + 1}] {text}")
 
-        citation_text = ""
-        for i, citation in enumerate(citations[:3]):
-            ref = citation.get("retrievedReferences", [{}])[0]
-            snippet = ref.get("content", {}).get("text", "")[:100]
-            if snippet:
-                citation_text += f"\n[Source {i+1}]: {snippet}..."
+        if not passages:
+            return "No relevant information found in the knowledge base."
 
-        return f"{answer}{citation_text}" if answer else "No relevant information found in the knowledge base."
+        return "\n\n".join(passages)
 
     except Exception as e:
         return f"Error querying knowledge base: {str(e)}"

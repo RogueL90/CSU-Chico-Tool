@@ -1,17 +1,18 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, StyleSheet } from 'react-native';
+import BotMarkdown from '../BotMarkdown';
 
 /**
- * Renders a plain text answer from the bot.
+ * Renders a markdown-formatted text answer from the bot.
  *
  * Props:
- *   text - string
+ *   text - markdown string
  */
 export default function TextOutput({ text }) {
   if (!text) return null;
   return (
     <View style={styles.container}>
-      <Text style={styles.text}>{text}</Text>
+      <BotMarkdown text={text} />
     </View>
   );
 }
