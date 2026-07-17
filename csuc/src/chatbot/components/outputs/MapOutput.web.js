@@ -13,20 +13,21 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { getPlaceDetails } from '../../../../maps-api/places';
 import { getRoutes } from '../../../../maps-api/directions';
+import { distanceMeters } from '../../../../maps-api/location';
 import PlaceInfo from './map/PlaceInfo';
 import StepsList from './map/StepsList';
 
 // Web fork of MapOutput. Metro resolves this file instead of
 // MapOutput.js when bundling for web — react-native-maps is native-only.
-// Mirrors the native layout: full-screen map (Google Maps Embed API
-// iframe) with the same @gorhom bottom sheet at the bottom hosting the
-// card content. The Directions REST API blocks browser CORS, so the
-// ETA/turn-by-turn list stays mobile-only — the directions iframe draws
-// the route and ETA on the map itself.
+// Renders with the Google Maps JavaScript API (same tiles as the mobile
+// Google Maps) and draws routes as our own solid polylines — red
+// selected / gray alternates, exactly like the native app. Route data
+// comes through the Lambda /directions proxy (Google's Directions REST
+// API blocks browser CORS).
 
 const MINI_H = 150;
+const REROUTE_THRESHOLD_METERS = 30;
 
-const EMBED_BASE = 'https://www.google.com/maps/embed/v1';
 const KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 const MODES = [
@@ -46,19 +47,64 @@ function formatDuration(minutes) {
   return remHr ? `${d} d ${remHr} hr` : `${d} d`;
 }
 
-function MapFrame({ src, style }) {
-  // Plain DOM iframe — react-native-web renders to the DOM, so this is
-  // legal in a .web.js file.
-  return (
-    <iframe
-      src={src}
-      style={{ border: 0, display: 'block', width: '100%', height: '100%', ...style }}
-      allowFullScreen
-      loading="lazy"
-      referrerPolicy="no-referrer-when-downgrade"
-      title="Map"
-    />
-  );
+// ── Maps JavaScript API loader (one script tag, cached promise) ──
+let mapsPromise = null;
+function loadGoogleMaps() {
+  if (mapsPromise) return mapsPromise;
+  mapsPromise = new Promise((resolve, reject) => {
+    if (window.google?.maps?.Map) {
+      resolve(window.google.maps);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${KEY}&v=weekly&loading=async&callback=__onGMapsReady`;
+    window.__onGMapsReady = () => resolve(window.google.maps);
+    script.onerror = () => {
+      mapsPromise = null;
+      reject(new Error('Google Maps JS failed to load'));
+    };
+    document.head.appendChild(script);
+  });
+  return mapsPromise;
+}
+
+/**
+ * A real google.maps.Map in a div. Mobile-app look: no desktop controls,
+ * no clickable POI popups — just the map.
+ *
+ * Props:
+ *   center      - { lat, lng }
+ *   zoom        - initial zoom
+ *   interactive - pan/zoom gestures on/off (mini card is inert)
+ *   onMap       - callback(map, mapsSdk) once the map exists
+ */
+function WebMap({ center, zoom, interactive, onMap }) {
+  const hostRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let map = null;
+    loadGoogleMaps().then((maps) => {
+      if (cancelled || !hostRef.current) return;
+      map = new maps.Map(hostRef.current, {
+        center,
+        zoom,
+        disableDefaultUI: true,
+        clickableIcons: false,
+        keyboardShortcuts: false,
+        gestureHandling: interactive ? 'greedy' : 'none',
+      });
+      onMap?.(map, maps);
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // Recreating the map on prop changes would flash tiles; the parent
+    // moves the camera through the map instance instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return <div ref={hostRef} style={{ width: '100%', height: '100%' }} />;
 }
 
 /**
@@ -68,16 +114,23 @@ function MapFrame({ src, style }) {
 export default function MapOutput({ map }) {
   const [expanded, setExpanded] = useState(false);
   const [mode, setMode] = useState('walking');
-  // Browser geolocation for the directions origin; null until granted.
+  // Route origin: first GPS fix, refreshed after real movement only.
   const [origin, setOrigin] = useState(null);
   const [placeInfo, setPlaceInfo] = useState(null);
-  // Route (via the Lambda /directions proxy) for the ETA + steps list
   const [routes, setRoutes] = useState([]);
+  const [selectedIdx, setSelectedIdx] = useState(0);
   const [fetching, setFetching] = useState(false);
-  const sheetRef = useRef(null);
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+
+  // Full-screen map instance + overlay handles (imperative Google objects)
+  const fullMapRef = useRef(null); // { map, maps }
+  const polylinesRef = useRef([]);
+  const destMarkerRef = useRef(null);
+  const userMarkerRef = useRef(null);
+  const hasFitRef = useRef(false);
+  const routesRef = useRef({ routes: [], selectedIdx: 0 });
+
+  const { width: windowWidth } = useWindowDimensions();
   const miniWidth = Math.round(Math.min(windowWidth, 480) * 0.72);
-  const sheetMax = Math.round(windowHeight * 0.65);
 
   const label = map.label;
   const address = map.address;
@@ -85,18 +138,51 @@ export default function MapOutput({ map }) {
   const lng = Number(map.lng);
   const validCoords = Number.isFinite(lat) && Number.isFinite(lng);
 
+  // ── Live browser geolocation while the full map is open ──
   useEffect(() => {
-    if (!expanded || origin || !navigator?.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (pos) =>
-        setOrigin({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      () => {}, // denied/unavailable -> stay in place mode
-      { enableHighAccuracy: true, timeout: 10000 }
+    if (!expanded || !navigator?.geolocation) return undefined;
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const next = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        // Blue dot follows every fix
+        const handles = fullMapRef.current;
+        if (handles && !userMarkerRef.current) {
+          userMarkerRef.current = new handles.maps.Marker({
+            map: handles.map,
+            position: next,
+            zIndex: 10,
+            icon: {
+              path: handles.maps.SymbolPath.CIRCLE,
+              scale: 8,
+              fillColor: '#007AFF',
+              fillOpacity: 1,
+              strokeColor: '#fff',
+              strokeWeight: 3,
+            },
+            clickable: false,
+          });
+        } else {
+          userMarkerRef.current?.setPosition(next);
+        }
+        // Route origin only moves after real movement (avoids re-routing
+        // on GPS jitter)
+        setOrigin((prev) =>
+          !prev || distanceMeters(prev, next) >= REROUTE_THRESHOLD_METERS
+            ? next
+            : prev
+        );
+      },
+      () => {}, // denied/unavailable -> map still shows the destination
+      { enableHighAccuracy: true, maximumAge: 5000 }
     );
-  }, [expanded, origin]);
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+      userMarkerRef.current?.setMap(null);
+      userMarkerRef.current = null;
+    };
+  }, [expanded]);
 
-  // Place details (summary, hours, phone) for the sheet — the Places
-  // API (New) supports browser CORS, so the shared module works here.
+  // ── Place details (summary, hours, phone) for the sheet ──
   useEffect(() => {
     if (!expanded || !validCoords) {
       setPlaceInfo(null);
@@ -111,33 +197,99 @@ export default function MapOutput({ map }) {
     };
   }, [expanded, label, lat, lng, validCoords]);
 
-  // Route fetch — mirrors the native flow (origin, destination, mode).
+  // ── Route fetch (stale-while-revalidate, like native) ──
   useEffect(() => {
-    if (!expanded || !origin || !validCoords) {
-      setRoutes([]);
-      return undefined;
-    }
+    if (!expanded || !origin || !validCoords) return undefined;
     let stale = false;
     setFetching(true);
     getRoutes(origin, { lat, lng }, mode).then((result) => {
       if (stale) return;
       setFetching(false);
       setRoutes(result);
+      setSelectedIdx(0);
     });
     return () => {
       stale = true;
     };
   }, [expanded, origin, mode, lat, lng, validCoords]);
 
+  // ── Draw route polylines on the full map ──
+  const drawRoutes = () => {
+    const handles = fullMapRef.current;
+    if (!handles) return;
+    const { map: gmap, maps } = handles;
+    const { routes: allRoutes, selectedIdx: sel } = routesRef.current;
+
+    polylinesRef.current.forEach((line) => line.setMap(null));
+    polylinesRef.current = [];
+
+    allRoutes.forEach((route, i) => {
+      if (route.coordinates.length < 2) return;
+      const path = route.coordinates.map((c) => ({
+        lat: c.latitude,
+        lng: c.longitude,
+      }));
+      const selected = i === sel;
+      const line = new maps.Polyline({
+        map: gmap,
+        path,
+        strokeColor: selected ? '#C8102E' : '#9AA0A6',
+        strokeWeight: selected ? 5 : 4,
+        strokeOpacity: 1,
+        zIndex: selected ? 2 : 1,
+        clickable: !selected,
+      });
+      if (!selected) {
+        line.addListener('click', () => setSelectedIdx(i));
+      }
+      polylinesRef.current.push(line);
+    });
+
+    // Frame every route option once per open; afterwards the user owns
+    // the camera.
+    if (!hasFitRef.current && allRoutes.length) {
+      hasFitRef.current = true;
+      const bounds = new maps.LatLngBounds();
+      allRoutes.forEach((route) =>
+        route.coordinates.forEach((c) =>
+          bounds.extend({ lat: c.latitude, lng: c.longitude })
+        )
+      );
+      gmap.fitBounds(bounds, { top: 80, right: 40, bottom: 320, left: 40 });
+    }
+  };
+
+  useEffect(() => {
+    routesRef.current = { routes, selectedIdx };
+    drawRoutes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routes, selectedIdx]);
+
+  // ── Reset per-open state when the modal closes ──
+  useEffect(() => {
+    if (expanded) return;
+    setRoutes([]);
+    setSelectedIdx(0);
+    setOrigin(null);
+    hasFitRef.current = false;
+    fullMapRef.current = null;
+    polylinesRef.current = [];
+    destMarkerRef.current = null;
+  }, [expanded]);
+
   if (!validCoords) return null;
 
-  const route = routes[0] || null;
+  const route = routes[selectedIdx] || null;
 
-  const placeSrc = `${EMBED_BASE}/place?key=${KEY}&q=${lat},${lng}&zoom=17`;
-  const directionsSrc = origin
-    ? `${EMBED_BASE}/directions?key=${KEY}&origin=${origin.lat},${origin.lng}` +
-      `&destination=${lat},${lng}&mode=${mode}`
-    : placeSrc;
+  const handleFullMap = (gmap, maps) => {
+    fullMapRef.current = { map: gmap, maps };
+    destMarkerRef.current = new maps.Marker({
+      map: gmap,
+      position: { lat, lng },
+      title: label,
+    });
+    drawRoutes();
+  };
 
   return (
     <View style={styles.wrapper}>
@@ -150,8 +302,15 @@ export default function MapOutput({ map }) {
         accessibilityLabel={`Expand map: ${label}`}
       >
         <View style={{ width: miniWidth, height: MINI_H }}>
-          <MapFrame src={placeSrc} />
-          {/* Catch the click so the card expands instead of the map panning */}
+          <WebMap
+            center={{ lat, lng }}
+            zoom={16}
+            interactive={false}
+            onMap={(gmap, maps) => {
+              new maps.Marker({ map: gmap, position: { lat, lng }, title: label });
+            }}
+          />
+          {/* Catch the click so the card expands */}
           <View style={StyleSheet.absoluteFill} />
         </View>
 
@@ -181,12 +340,16 @@ export default function MapOutput({ map }) {
             own gesture root here too */}
         <GestureHandlerRootView style={styles.full}>
           <View style={StyleSheet.absoluteFill}>
-            <MapFrame src={directionsSrc} />
+            <WebMap
+              center={{ lat, lng }}
+              zoom={16}
+              interactive
+              onMap={handleFullMap}
+            />
           </View>
 
           <BottomSheet
-            ref={sheetRef}
-            snapPoints={[300, sheetMax]}
+            snapPoints={[300, '65%']}
             index={0}
             enableDynamicSizing={false}
             enablePanDownToClose={false}
@@ -433,9 +596,6 @@ const styles = StyleSheet.create({
     color: '#8A8A8E',
     alignSelf: 'center',
   },
-  stepsScroll: {
-    maxHeight: 300,
-  },
   btnRow: {
     flexDirection: 'row',
     gap: 10,
@@ -452,5 +612,8 @@ const styles = StyleSheet.create({
     color: '#C8102E',
     fontSize: 15,
     fontWeight: '700',
+  },
+  stepsScroll: {
+    maxHeight: 300,
   },
 });
