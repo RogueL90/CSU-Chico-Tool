@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
 import TextOutput from './outputs/TextOutput';
 import MapOutput from './outputs/MapOutput';
 import BotMarkdown from './BotMarkdown';
@@ -21,27 +21,84 @@ import BotMarkdown from './BotMarkdown';
  * Choice chips live in the chips bar in ChatScreen.
  * Neither belongs inside a message bubble.
  */
-export default function MessageBubble({ message }) {
+export default function MessageBubble({ message, isFirst = false }) {
+  const entranceOpacity = useRef(new Animated.Value(0)).current;
+  const entranceMotion = useRef(new Animated.Value(0)).current;
+  const successPulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(entranceOpacity, {
+        toValue: 1,
+        duration: 190,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.spring(entranceMotion, {
+        toValue: 1,
+        speed: 22,
+        bounciness: 5,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    if (message.type === 'result') {
+      Animated.sequence([
+        Animated.delay(170),
+        Animated.timing(successPulse, {
+          toValue: 1.018,
+          duration: 110,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.spring(successPulse, {
+          toValue: 1,
+          speed: 24,
+          bounciness: 3,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [entranceOpacity, entranceMotion, successPulse, message.type]);
+
+  const entranceStyle = {
+    opacity: entranceOpacity,
+    transform: [{
+      translateX: message.role === 'user'
+        ? entranceMotion.interpolate({ inputRange: [0, 1], outputRange: [12, 0] })
+        : 0,
+    }, {
+      translateY: message.role === 'bot'
+        ? entranceMotion.interpolate({ inputRange: [0, 1], outputRange: [10, 0] })
+        : 0,
+    }, {
+      scale: Animated.multiply(
+        entranceMotion.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] }),
+        successPulse
+      ),
+    }],
+  };
+
   // ── User bubble ───────────────────────────────────────────────────────────
   if (message.role === 'user') {
     return (
-      <View style={styles.userRow}>
+      <Animated.View style={[styles.userRow, entranceStyle]}>
         <View style={styles.userBubble}>
           <Text style={styles.userText}>{message.text}</Text>
         </View>
-      </View>
+      </Animated.View>
     );
   }
 
   // ── Bot message ───────────────────────────────────────────────────────────
   return (
-    <View style={styles.botRow}>
+    <Animated.View style={[styles.botRow, entranceStyle]}>
       <View style={styles.avatar}>
         <Text style={styles.avatarEmoji}>🐾</Text>
       </View>
       <View style={styles.botContent}>
         {!!message.text && (
-          <View style={styles.botBubble}>
+          <View style={[styles.botBubble, isFirst && styles.firstBotBubble]}>
             <BotMarkdown text={message.text} />
           </View>
         )}
@@ -56,7 +113,7 @@ export default function MessageBubble({ message }) {
           </View>
         )}
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -108,6 +165,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     alignSelf: 'flex-start',
     maxWidth: '92%',
+  },
+  firstBotBubble: {
+    borderRadius: 24,
+    borderBottomLeftRadius: 24,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
   },
   botText: { color: '#2C2022', fontSize: 15, lineHeight: 22 },
   outputsContainer: { marginTop: 4 },

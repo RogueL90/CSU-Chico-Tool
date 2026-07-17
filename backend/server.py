@@ -50,6 +50,7 @@ class AskResponse(BaseModel):
     confidence: float
     text: Optional[str] = None
     phone: Optional[str] = None
+    phone_label: Optional[str] = None
     map: Optional[dict] = None
     output_types: list[str] = []
     follow_up_choices: Optional[list[FollowUpChoice]] = None

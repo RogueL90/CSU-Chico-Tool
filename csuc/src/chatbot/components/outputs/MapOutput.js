@@ -51,6 +51,30 @@ const MODES = [
   { key: 'DRIVING', label: 'Drive' },
 ];
 
+const AnimatedTouchableOpacity = Animated.createAnimatedComponent(TouchableOpacity);
+
+function MapPressable({ style, onPressIn, onPressOut, children, ...props }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const animateScale = (toValue, spring = false) => {
+    const config = { toValue, useNativeDriver: true };
+    (spring
+      ? Animated.spring(scale, { ...config, speed: 28, bounciness: 4 })
+      : Animated.timing(scale, { ...config, duration: 90, easing: Easing.out(Easing.quad) })
+    ).start();
+  };
+
+  return (
+    <AnimatedTouchableOpacity
+      {...props}
+      style={[style, { transform: [{ scale }] }]}
+      onPressIn={(event) => { animateScale(0.97); onPressIn?.(event); }}
+      onPressOut={(event) => { animateScale(1, true); onPressOut?.(event); }}
+    >
+      {children}
+    </AnimatedTouchableOpacity>
+  );
+}
+
 /**
  * Format a duration in minutes as a clean human-readable string:
  * 45 -> "45 min", 328 -> "5 hr 28 min", 1500 -> "1 d 1 hr"
@@ -81,6 +105,7 @@ export default function MapOutput({ map }) {
   // which one the user has selected.
   const [routes, setRoutes] = useState([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
+  const [selectedRouteWidth, setSelectedRouteWidth] = useState(5);
   const [fetching, setFetching] = useState(false);
   const [routeError, setRouteError] = useState(false);
   // Route origin: updated only after real movement so we don't re-fetch
@@ -107,6 +132,8 @@ export default function MapOutput({ map }) {
   const [mapEpoch, setMapEpoch] = useState(0);
   const pendingFitRef = useRef(false);
   const sheetTranslateY = useRef(new Animated.Value(SHEET_H)).current;
+  const mapTransition = useRef(new Animated.Value(0)).current;
+  const recenterRotation = useRef(new Animated.Value(0)).current;
   // Which snap point the sheet is resting at: 'collapsed' | 'expanded'
   const snapRef = useRef('collapsed');
 
@@ -127,7 +154,58 @@ export default function MapOutput({ map }) {
     sheetTranslateY.setValue(SHEET_H);
   };
 
-  const closeMap = () => snapTo(SHEET_H, finishClosingMap);
+  const closeMap = () => {
+    Animated.parallel([
+      Animated.timing(sheetTranslateY, {
+        toValue: SHEET_H,
+        duration: 190,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(mapTransition, {
+        toValue: 0,
+        duration: 190,
+        easing: Easing.inOut(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (finished) finishClosingMap();
+    });
+  };
+
+  const openMap = () => {
+    mapTransition.setValue(0);
+    setExpanded(true);
+    requestAnimationFrame(() => {
+      Animated.spring(mapTransition, {
+        toValue: 1,
+        speed: 22,
+        bounciness: 2,
+        useNativeDriver: true,
+      }).start();
+    });
+  };
+
+  const recenterMap = () => {
+    recenterRotation.setValue(0);
+    Animated.spring(recenterRotation, {
+      toValue: 1,
+      speed: 22,
+      bounciness: 5,
+      useNativeDriver: true,
+    }).start();
+    if (liveLoc) {
+      mapRef.current?.animateToRegion(
+        {
+          latitude: liveLoc.lat,
+          longitude: liveLoc.lng,
+          latitudeDelta: FULL_DELTA,
+          longitudeDelta: FULL_DELTA,
+        },
+        350
+      );
+    }
+  };
 
   // Drag between snap points: collapsed <-> expanded, or down to dismiss.
   const sheetPanResponder = useRef(
@@ -312,6 +390,13 @@ export default function MapOutput({ map }) {
     }
   }, [navMode, liveLoc, heading, followSuspended, routes, selectedIdx, navStepIdx, lat, lng, mode]);
 
+  useEffect(() => {
+    if (!routes[selectedIdx]) return undefined;
+    setSelectedRouteWidth(7);
+    const settle = setTimeout(() => setSelectedRouteWidth(5), 220);
+    return () => clearTimeout(settle);
+  }, [routes, selectedIdx]);
+
   if (!validCoords) return null;
 
   const selectedRoute = routes[selectedIdx] || null;
@@ -388,9 +473,9 @@ export default function MapOutput({ map }) {
   return (
     <View style={styles.wrapper}>
       {/* ── Mini map card (non-interactive, tappable) ── */}
-      <TouchableOpacity
+      <MapPressable
         style={styles.miniCard}
-        onPress={() => setExpanded(true)}
+        onPress={openMap}
         activeOpacity={0.9}
         accessibilityRole="button"
         accessibilityLabel={`Expand map: ${label}`}
@@ -425,16 +510,21 @@ export default function MapOutput({ map }) {
           </View>
           <Text style={styles.miniChevron}>›</Text>
         </View>
-      </TouchableOpacity>
+      </MapPressable>
 
       {/* ── Full-screen modal ── */}
       <Modal
         visible={expanded}
-        animationType="fade"
-        onRequestClose={() => setExpanded(false)}
+        animationType="none"
+        onRequestClose={closeMap}
         statusBarTranslucent
       >
         <StatusBar barStyle="dark-content" />
+
+        <Animated.View style={[styles.modalScene, {
+          opacity: mapTransition,
+          transform: [{ scale: mapTransition.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) }],
+        }]}>
 
         {/* Map fills the entire screen */}
         <MapView
@@ -494,7 +584,7 @@ export default function MapOutput({ map }) {
             <Polyline
               coordinates={selectedRoute.coordinates}
               strokeColor="#C8102E"
-              strokeWidth={5}
+              strokeWidth={selectedRouteWidth}
               zIndex={2}
             />
           )}
@@ -526,14 +616,14 @@ export default function MapOutput({ map }) {
         {/* ── Navigation overlays ── */}
         {navMode && <NavBanner step={currentStep} distanceText={distToManeuver} />}
         {navMode && followSuspended && (
-          <TouchableOpacity
+          <MapPressable
             style={styles.recenterChip}
             onPress={() => setFollowSuspended(false)}
             accessibilityRole="button"
             accessibilityLabel="Resume following my location"
           >
             <Text style={styles.recenterChipText}>◎ Re-center</Text>
-          </TouchableOpacity>
+          </MapPressable>
         )}
         {navMode && (
           <View style={styles.navBar}>
@@ -545,14 +635,14 @@ export default function MapOutput({ map }) {
                 {remaining ? metersToDisplay(remaining.meters) : ''}
               </Text>
             </View>
-            <TouchableOpacity
+            <MapPressable
               style={styles.exitBtn}
               onPress={exitNavigation}
               accessibilityRole="button"
               accessibilityLabel="Exit navigation"
             >
               <Text style={styles.exitBtnText}>Exit</Text>
-            </TouchableOpacity>
+            </MapPressable>
           </View>
         )}
 
@@ -580,7 +670,7 @@ export default function MapOutput({ map }) {
           {/* Mode segmented control + recenter */}
           <View style={styles.segment}>
             {MODES.map((m) => (
-              <TouchableOpacity
+              <MapPressable
                 key={m.key}
                 style={[styles.segmentBtn, mode === m.key && styles.segmentBtnActive]}
                 onPress={() => {
@@ -603,27 +693,19 @@ export default function MapOutput({ map }) {
                 >
                   {m.label}
                 </Text>
-              </TouchableOpacity>
+              </MapPressable>
             ))}
             {liveLoc && (
-              <TouchableOpacity
+              <MapPressable
                 style={styles.recenterBtn}
-                onPress={() =>
-                  mapRef.current?.animateToRegion(
-                    {
-                      latitude: liveLoc.lat,
-                      longitude: liveLoc.lng,
-                      latitudeDelta: FULL_DELTA,
-                      longitudeDelta: FULL_DELTA,
-                    },
-                    350
-                  )
-                }
+                onPress={recenterMap}
                 accessibilityRole="button"
                 accessibilityLabel="Center map on my location"
               >
-                <Text style={styles.recenterIcon}>◎</Text>
-              </TouchableOpacity>
+                <Animated.Text style={[styles.recenterIcon, {
+                  transform: [{ rotate: recenterRotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '300deg'] }) }],
+                }]}>◎</Animated.Text>
+              </MapPressable>
             )}
           </View>
 
@@ -648,7 +730,7 @@ export default function MapOutput({ map }) {
 
           {/* Actions: back to chat + start navigation */}
           <View style={styles.btnRow}>
-            <TouchableOpacity
+            <MapPressable
               style={styles.backBtn}
               onPress={closeMap}
               activeOpacity={0.85}
@@ -656,9 +738,9 @@ export default function MapOutput({ map }) {
               accessibilityLabel="Back to chat"
             >
               <Text style={styles.backBtnText}>Back to Chat</Text>
-            </TouchableOpacity>
+            </MapPressable>
             {selectedRoute && liveLoc && (
-              <TouchableOpacity
+              <MapPressable
                 style={styles.startBtn}
                 onPress={startNavigation}
                 activeOpacity={0.85}
@@ -666,12 +748,13 @@ export default function MapOutput({ map }) {
                 accessibilityLabel="Start navigation"
               >
                 <Text style={styles.startBtnText}>Start</Text>
-              </TouchableOpacity>
+              </MapPressable>
             )}
           </View>
 
           {/* Turn-by-turn list — below the fold until the sheet is dragged up */}
           <StepsList steps={selectedRoute?.steps} />
+        </Animated.View>
         </Animated.View>
       </Modal>
     </View>
@@ -679,6 +762,7 @@ export default function MapOutput({ map }) {
 }
 
 const styles = StyleSheet.create({
+  modalScene: { flex: 1, backgroundColor: '#F4F4F6' },
   wrapper: {
     marginTop: 8,
   },
@@ -911,13 +995,13 @@ const styles = StyleSheet.create({
   },
   backBtn: {
     flex: 1,
-    backgroundColor: '#F5F5F7',
+    backgroundColor: '#C8102E',
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
   },
   backBtnText: {
-    color: '#C8102E',
+    color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '700',
   },
