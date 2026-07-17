@@ -16,6 +16,7 @@ import { getRoutes } from '../../../../maps-api/directions';
 import { distanceMeters } from '../../../../maps-api/location';
 import PlaceInfo from './map/PlaceInfo';
 import StepsList from './map/StepsList';
+import NavBanner from './map/NavBanner';
 
 // Web fork of MapOutput. Metro resolves this file instead of
 // MapOutput.js when bundling for web — react-native-maps is native-only.
@@ -28,12 +29,36 @@ import StepsList from './map/StepsList';
 const MINI_H = 150;
 const REROUTE_THRESHOLD_METERS = 30;
 
+// Navigation-mode tuning (same values as the native MapOutput)
+const STEP_ADVANCE_METERS = 15;
+const OFF_ROUTE_METERS = 50;
+const OFF_ROUTE_FIXES = 2;
+const CAMERA_THROTTLE_MS = 900;
+
 const KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 const MODES = [
   { key: 'walking', label: 'Walk' },
   { key: 'driving', label: 'Drive' },
 ];
+
+function metersToDisplay(m) {
+  const feet = m * 3.28084;
+  if (feet < 1000) return `${Math.max(10, Math.round(feet / 10) * 10)} ft`;
+  return `${(m / 1609.344).toFixed(1)} mi`;
+}
+
+// Compass bearing between two fixes — fallback heading when the browser
+// doesn't report coords.heading.
+function bearingDegrees(from, to) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLng = toRad(to.lng - from.lng);
+  const y = Math.sin(dLng) * Math.cos(toRad(to.lat));
+  const x =
+    Math.cos(toRad(from.lat)) * Math.sin(toRad(to.lat)) -
+    Math.sin(toRad(from.lat)) * Math.cos(toRad(to.lat)) * Math.cos(dLng);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
 
 // Same formatting as the native MapOutput: 45 -> "45 min", 328 -> "5 hr 28 min"
 function formatDuration(minutes) {
@@ -93,6 +118,9 @@ function WebMap({ center, zoom, interactive, onMap }) {
         clickableIcons: false,
         keyboardShortcuts: false,
         gestureHandling: interactive ? 'greedy' : 'none',
+        // Vector renderer (WebGL) so navigation can rotate/tilt the
+        // camera like the phone; raster maps ignore heading/tilt.
+        ...(interactive ? { mapId: 'DEMO_MAP_ID' } : {}),
       });
       onMap?.(map, maps);
     }).catch(() => {});
@@ -120,6 +148,11 @@ export default function MapOutput({ map }) {
   const [routes, setRoutes] = useState([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [fetching, setFetching] = useState(false);
+  // Live navigation mode (ported from the native MapOutput)
+  const [liveLoc, setLiveLoc] = useState(null);
+  const [navMode, setNavMode] = useState(false);
+  const [navStepIdx, setNavStepIdx] = useState(0);
+  const [followSuspended, setFollowSuspended] = useState(false);
 
   // Full-screen map instance + overlay handles (imperative Google objects)
   const fullMapRef = useRef(null); // { map, maps }
@@ -127,7 +160,13 @@ export default function MapOutput({ map }) {
   const destMarkerRef = useRef(null);
   const userMarkerRef = useRef(null);
   const hasFitRef = useRef(false);
-  const routesRef = useRef({ routes: [], selectedIdx: 0 });
+  const routesRef = useRef({ routes: [], selectedIdx: 0, navMode: false });
+  const navModeRef = useRef(false);
+  const headingRef = useRef(0);
+  const prevFixRef = useRef(null);
+  const lastCameraRef = useRef(0);
+  const offRouteCountRef = useRef(0);
+  const reroutingRef = useRef(false);
 
   const { width: windowWidth } = useWindowDimensions();
   const miniWidth = Math.round(Math.min(windowWidth, 480) * 0.72);
@@ -144,26 +183,57 @@ export default function MapOutput({ map }) {
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         const next = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        // Blue dot follows every fix
-        const handles = fullMapRef.current;
-        if (handles && !userMarkerRef.current) {
-          userMarkerRef.current = new handles.maps.Marker({
-            map: handles.map,
-            position: next,
-            zIndex: 10,
-            icon: {
-              path: handles.maps.SymbolPath.CIRCLE,
-              scale: 8,
-              fillColor: '#007AFF',
-              fillOpacity: 1,
-              strokeColor: '#fff',
-              strokeWeight: 3,
-            },
-            clickable: false,
-          });
-        } else {
-          userMarkerRef.current?.setPosition(next);
+
+        // Heading: browser-reported while moving, else bearing from the
+        // previous fix (ignoring jitter under ~2m)
+        const reported = pos.coords.heading;
+        if (Number.isFinite(reported) && !Number.isNaN(reported)) {
+          headingRef.current = reported;
+        } else if (
+          prevFixRef.current &&
+          distanceMeters(prevFixRef.current, next) > 2
+        ) {
+          headingRef.current = bearingDegrees(prevFixRef.current, next);
         }
+        prevFixRef.current = next;
+
+        // User marker follows every fix: blue dot browsing, heading
+        // arrow while navigating
+        const handles = fullMapRef.current;
+        if (handles) {
+          const icon = navModeRef.current
+            ? {
+                path: handles.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                scale: 7,
+                rotation: headingRef.current,
+                fillColor: '#007AFF',
+                fillOpacity: 1,
+                strokeColor: '#fff',
+                strokeWeight: 2,
+              }
+            : {
+                path: handles.maps.SymbolPath.CIRCLE,
+                scale: 8,
+                fillColor: '#007AFF',
+                fillOpacity: 1,
+                strokeColor: '#fff',
+                strokeWeight: 3,
+              };
+          if (!userMarkerRef.current) {
+            userMarkerRef.current = new handles.maps.Marker({
+              map: handles.map,
+              position: next,
+              zIndex: 10,
+              icon,
+              clickable: false,
+            });
+          } else {
+            userMarkerRef.current.setPosition(next);
+            userMarkerRef.current.setIcon(icon);
+          }
+        }
+
+        setLiveLoc(next);
         // Route origin only moves after real movement (avoids re-routing
         // on GPS jitter)
         setOrigin((prev) =>
@@ -197,9 +267,10 @@ export default function MapOutput({ map }) {
     };
   }, [expanded, label, lat, lng, validCoords]);
 
-  // ── Route fetch (stale-while-revalidate, like native) ──
+  // ── Route fetch (stale-while-revalidate, like native). Suspended
+  // during navigation — the off-route logic owns re-routing then. ──
   useEffect(() => {
-    if (!expanded || !origin || !validCoords) return undefined;
+    if (!expanded || !origin || !validCoords || navMode) return undefined;
     let stale = false;
     setFetching(true);
     getRoutes(origin, { lat, lng }, mode).then((result) => {
@@ -211,25 +282,28 @@ export default function MapOutput({ map }) {
     return () => {
       stale = true;
     };
-  }, [expanded, origin, mode, lat, lng, validCoords]);
+  }, [expanded, origin, mode, lat, lng, validCoords, navMode]);
 
   // ── Draw route polylines on the full map ──
   const drawRoutes = () => {
     const handles = fullMapRef.current;
     if (!handles) return;
     const { map: gmap, maps } = handles;
-    const { routes: allRoutes, selectedIdx: sel } = routesRef.current;
+    const { routes: allRoutes, selectedIdx: sel, navMode: navigating } =
+      routesRef.current;
 
     polylinesRef.current.forEach((line) => line.setMap(null));
     polylinesRef.current = [];
 
     allRoutes.forEach((route, i) => {
       if (route.coordinates.length < 2) return;
+      const selected = i === sel;
+      // Only the active route shows while navigating, like native
+      if (navigating && !selected) return;
       const path = route.coordinates.map((c) => ({
         lat: c.latitude,
         lng: c.longitude,
       }));
-      const selected = i === sel;
       const line = new maps.Polyline({
         map: gmap,
         path,
@@ -260,10 +334,66 @@ export default function MapOutput({ map }) {
   };
 
   useEffect(() => {
-    routesRef.current = { routes, selectedIdx };
+    routesRef.current = { routes, selectedIdx, navMode };
+    navModeRef.current = navMode;
     drawRoutes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routes, selectedIdx]);
+  }, [routes, selectedIdx, navMode]);
+
+  // ── Navigation: camera follow, step progression, off-route re-route ──
+  useEffect(() => {
+    if (!navMode || !liveLoc) return;
+    const route = routes[selectedIdx];
+    const handles = fullMapRef.current;
+    if (!route || !handles) return;
+
+    // Heading-up tilted follow, throttled so camera moves don't pile up
+    const now = Date.now();
+    if (!followSuspended && now - lastCameraRef.current > CAMERA_THROTTLE_MS) {
+      lastCameraRef.current = now;
+      handles.map.moveCamera({
+        center: liveLoc,
+        zoom: 17.5,
+        heading: headingRef.current,
+        tilt: 45,
+      });
+    }
+
+    // Advance to the next step once we reach the current maneuver point
+    let idx = navStepIdx;
+    while (
+      idx < route.steps.length - 1 &&
+      distanceMeters(liveLoc, route.steps[idx].endLocation) < STEP_ADVANCE_METERS
+    ) {
+      idx += 1;
+    }
+    if (idx !== navStepIdx) setNavStepIdx(idx);
+
+    // Off-route: far from every point of the route line for several fixes
+    let minDist = Infinity;
+    for (const c of route.coordinates) {
+      const d = distanceMeters(liveLoc, { lat: c.latitude, lng: c.longitude });
+      if (d < minDist) minDist = d;
+      if (minDist < OFF_ROUTE_METERS) break;
+    }
+    if (minDist > OFF_ROUTE_METERS) {
+      offRouteCountRef.current += 1;
+      if (offRouteCountRef.current >= OFF_ROUTE_FIXES && !reroutingRef.current) {
+        reroutingRef.current = true;
+        getRoutes(liveLoc, { lat, lng }, mode).then((result) => {
+          reroutingRef.current = false;
+          offRouteCountRef.current = 0;
+          if (result.length) {
+            setRoutes(result);
+            setSelectedIdx(0);
+            setNavStepIdx(0);
+          }
+        });
+      }
+    } else {
+      offRouteCountRef.current = 0;
+    }
+  }, [navMode, liveLoc, followSuspended, routes, selectedIdx, navStepIdx, lat, lng, mode]);
 
   // ── Reset per-open state when the modal closes ──
   useEffect(() => {
@@ -271,6 +401,13 @@ export default function MapOutput({ map }) {
     setRoutes([]);
     setSelectedIdx(0);
     setOrigin(null);
+    setLiveLoc(null);
+    setNavMode(false);
+    setNavStepIdx(0);
+    setFollowSuspended(false);
+    navModeRef.current = false;
+    prevFixRef.current = null;
+    offRouteCountRef.current = 0;
     hasFitRef.current = false;
     fullMapRef.current = null;
     polylinesRef.current = [];
@@ -281,12 +418,61 @@ export default function MapOutput({ map }) {
 
   const route = routes[selectedIdx] || null;
 
+  // Navigation-mode derived values (same as native)
+  const currentStep = navMode ? route?.steps[navStepIdx] : null;
+  const distToManeuver =
+    navMode && liveLoc && currentStep
+      ? metersToDisplay(distanceMeters(liveLoc, currentStep.endLocation))
+      : '';
+  const remaining =
+    navMode && route
+      ? route.steps.slice(navStepIdx).reduce(
+          (acc, s) => ({
+            sec: acc.sec + s.durationSeconds,
+            meters: acc.meters + s.distanceMeters,
+          }),
+          { sec: 0, meters: 0 }
+        )
+      : null;
+
+  const startNavigation = () => {
+    navModeRef.current = true;
+    setNavMode(true);
+    setNavStepIdx(0);
+    setFollowSuspended(false);
+    offRouteCountRef.current = 0;
+    lastCameraRef.current = 0; // camera snaps to the user immediately
+  };
+
+  const exitNavigation = () => {
+    navModeRef.current = false;
+    setNavMode(false);
+    setNavStepIdx(0);
+    setFollowSuspended(false);
+    const handles = fullMapRef.current;
+    if (handles) {
+      handles.map.moveCamera({ heading: 0, tilt: 0 });
+      if (route?.coordinates.length) {
+        const bounds = new handles.maps.LatLngBounds();
+        route.coordinates.forEach((c) =>
+          bounds.extend({ lat: c.latitude, lng: c.longitude })
+        );
+        handles.map.fitBounds(bounds, { top: 80, right: 40, bottom: 320, left: 40 });
+      }
+    }
+  };
+
   const handleFullMap = (gmap, maps) => {
     fullMapRef.current = { map: gmap, maps };
     destMarkerRef.current = new maps.Marker({
       map: gmap,
       position: { lat, lng },
       title: label,
+    });
+    // Dragging during navigation pauses the camera follow (Re-center
+    // chip resumes), same as native
+    gmap.addListener('dragstart', () => {
+      if (navModeRef.current) setFollowSuspended(true);
     });
     drawRoutes();
   };
@@ -348,6 +534,42 @@ export default function MapOutput({ map }) {
             />
           </View>
 
+          {/* ── Navigation overlays ── */}
+          {navMode && (
+            <NavBanner step={currentStep} distanceText={distToManeuver} />
+          )}
+          {navMode && followSuspended && (
+            <TouchableOpacity
+              style={styles.recenterChip}
+              onPress={() => setFollowSuspended(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Resume following my location"
+            >
+              <Text style={styles.recenterChipText}>◎ Re-center</Text>
+            </TouchableOpacity>
+          )}
+          {navMode && (
+            <View style={styles.navBar}>
+              <View style={styles.navBarInfo}>
+                <Text style={styles.navBarTime}>
+                  {remaining ? formatDuration(remaining.sec / 60) : '—'}
+                </Text>
+                <Text style={styles.navBarDistance}>
+                  {remaining ? metersToDisplay(remaining.meters) : ''}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.exitBtn}
+                onPress={exitNavigation}
+                accessibilityRole="button"
+                accessibilityLabel="Exit navigation"
+              >
+                <Text style={styles.exitBtnText}>Exit</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {!navMode && (
           <BottomSheet
             snapPoints={[300, '65%']}
             index={0}
@@ -413,7 +635,7 @@ export default function MapOutput({ map }) {
                 )}
               </View>
 
-              {/* Back to chat */}
+              {/* Actions: back to chat + start navigation */}
               <View style={styles.btnRow}>
                 <TouchableOpacity
                   style={styles.backBtn}
@@ -424,6 +646,17 @@ export default function MapOutput({ map }) {
                 >
                   <Text style={styles.backBtnText}>Back to Chat</Text>
                 </TouchableOpacity>
+                {route && liveLoc && (
+                  <TouchableOpacity
+                    style={styles.startBtn}
+                    onPress={startNavigation}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel="Start navigation"
+                  >
+                    <Text style={styles.startBtnText}>Start</Text>
+                  </TouchableOpacity>
+                )}
               </View>
 
               {/* Place details — below the fold until the sheet is dragged up */}
@@ -442,6 +675,7 @@ export default function MapOutput({ map }) {
               )}
             </BottomSheetScrollView>
           </BottomSheet>
+          )}
         </GestureHandlerRootView>
       </Modal>
     </View>
@@ -613,7 +847,86 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
   },
+  startBtn: {
+    flex: 1,
+    backgroundColor: '#C8102E',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  startBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
   stepsScroll: {
     maxHeight: 300,
+  },
+
+  /* ── Navigation mode (matches the native styles) ── */
+  navBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  navBarInfo: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+  },
+  navBarTime: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#C8102E',
+  },
+  navBarDistance: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#8A8A8E',
+  },
+  exitBtn: {
+    backgroundColor: '#F5F5F7',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 22,
+  },
+  exitBtnText: {
+    color: '#C8102E',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  recenterChip: {
+    position: 'absolute',
+    bottom: 110,
+    alignSelf: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  recenterChipText: {
+    color: '#C8102E',
+    fontSize: 13,
+    fontWeight: '700',
   },
 });
