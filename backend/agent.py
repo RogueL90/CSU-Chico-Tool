@@ -128,7 +128,15 @@ if os.environ.get("EXPO_PUBLIC_AWS_ACCESS_KEY_ID"):
         aws_session_token=os.environ.get("EXPO_PUBLIC_AWS_SESSION_TOKEN") or None,
     )
 _session = boto3.Session(**_session_kwargs)
-_model = BedrockModel(model_id=ORCHESTRATOR_MODEL_ID, boto_session=_session)
+# call-chico-guardrail: prompt-attack input filter + profanity/PII lists.
+# Pinned to a published version so console edits to DRAFT don't silently
+# change production; override via env to update or detach.
+_model = BedrockModel(
+    model_id=ORCHESTRATOR_MODEL_ID,
+    boto_session=_session,
+    guardrail_id=os.environ.get("GUARDRAIL_ID", "vu2hxv9kjmlo"),
+    guardrail_version=os.environ.get("GUARDRAIL_VERSION", "2"),
+)
 
 PHONE_PATTERNS = (
     re.compile(r"\((\d{3})\)\s*(\d{3})[-.\s]?(\d{4})"),
