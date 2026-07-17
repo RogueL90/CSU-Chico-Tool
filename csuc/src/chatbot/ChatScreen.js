@@ -582,6 +582,9 @@ export default function ChatScreen() {
           keyboardShouldPersistTaps="always"
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           onTouchStart={() => inputRef.current?.blur()}
+          bounces={false}
+          alwaysBounceVertical={false}
+          overScrollMode="never"
           showsVerticalScrollIndicator={false}
         />
 
