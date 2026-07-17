@@ -15,8 +15,10 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { watchLocation, watchHeading, distanceMeters } from '../../../../maps-api/location';
 import { getRoutes } from '../../../../maps-api/directions';
+import { getPlaceDetails } from '../../../../maps-api/places';
 import StepsList from './map/StepsList';
 import NavBanner from './map/NavBanner';
+import PlaceInfo from './map/PlaceInfo';
 
 // Navigation-mode tuning
 const STEP_ADVANCE_METERS = 15; // reached the maneuver point
@@ -115,6 +117,8 @@ export default function MapOutput({ map }) {
   // user marker (blue dot with direction cone).
   const [liveLoc, setLiveLoc] = useState(null);
   const [heading, setHeading] = useState(0);
+  // Place details (summary, hours, phone) shown in the expanded sheet
+  const [placeInfo, setPlaceInfo] = useState(null);
   // Live navigation mode
   const [navMode, setNavMode] = useState(false);
   const [navStepIdx, setNavStepIdx] = useState(0);
@@ -301,6 +305,21 @@ export default function MapOutput({ map }) {
   const lat = Number(map.lat);
   const lng = Number(map.lng);
   const validCoords = Number.isFinite(lat) && Number.isFinite(lng);
+
+  // Fetch place details (summary, hours, phone) once per open.
+  useEffect(() => {
+    if (!expanded || !validCoords) {
+      setPlaceInfo(null);
+      return undefined;
+    }
+    let stale = false;
+    getPlaceDetails(label, { lat, lng }).then((details) => {
+      if (!stale) setPlaceInfo(details);
+    });
+    return () => {
+      stale = true;
+    };
+  }, [expanded, label, lat, lng, validCoords]);
 
   // Fetch routes (with alternates) whenever the origin or mode changes.
   // Suspended during navigation — the off-route logic below owns re-routing.
@@ -752,7 +771,9 @@ export default function MapOutput({ map }) {
             )}
           </View>
 
-          {/* Turn-by-turn list — below the fold until the sheet is dragged up */}
+          {/* Place details + turn-by-turn — below the fold until the
+              sheet is dragged up */}
+          <PlaceInfo info={placeInfo} label={label} />
           <StepsList steps={selectedRoute?.steps} />
         </Animated.View>
         </Animated.View>

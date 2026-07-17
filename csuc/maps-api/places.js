@@ -57,3 +57,71 @@ export async function findPlace(query) {
     return null;
   }
 }
+
+/**
+ * Fetch display details for a specific place already shown on the map:
+ * short summary, opening hours, and phone number.
+ *
+ * `near` is the destination's { lat, lng } from the map payload — the
+ * bias circle is kept tight so we describe the exact place, not a
+ * similarly-named one elsewhere in town.
+ *
+ * Returns { summary, phone, openNow, todayHours, weekdayHours } or null.
+ * Any individual field may be null (e.g. campus buildings usually have
+ * no editorial summary). Never throws.
+ */
+export async function getPlaceDetails(query, near) {
+  try {
+    const response = await fetch(PLACES_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY,
+        'X-Goog-FieldMask':
+          'places.displayName,places.formattedAddress,places.editorialSummary,' +
+          'places.nationalPhoneNumber,places.currentOpeningHours,places.regularOpeningHours',
+      },
+      body: JSON.stringify({
+        textQuery: query,
+        locationBias: {
+          circle: {
+            center: near
+              ? { latitude: near.lat, longitude: near.lng }
+              : CAMPUS_CENTER,
+            radius: near ? 300 : BIAS_RADIUS_METERS,
+          },
+        },
+        maxResultCount: 1,
+        languageCode: 'en',
+        regionCode: 'US',
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      console.error(`Places API error ${response.status}:`, body);
+      return null;
+    }
+
+    const place = (await response.json()).places?.[0];
+    if (!place) return null;
+
+    const hours = place.currentOpeningHours ?? place.regularOpeningHours ?? {};
+    const weekdayHours = hours.weekdayDescriptions ?? null;
+    // Google's weekday list starts Monday; JS getDay() starts Sunday.
+    const todayIdx = (new Date().getDay() + 6) % 7;
+
+    const phoneDigits = (place.nationalPhoneNumber ?? '').replace(/\D/g, '');
+
+    return {
+      summary: place.editorialSummary?.text ?? null,
+      phone: phoneDigits.length === 10 ? phoneDigits : null,
+      openNow: place.currentOpeningHours?.openNow ?? null,
+      todayHours: weekdayHours?.[todayIdx] ?? null,
+      weekdayHours,
+    };
+  } catch (error) {
+    console.error('Place details request failed:', error);
+    return null;
+  }
+}
