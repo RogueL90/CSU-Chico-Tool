@@ -669,13 +669,17 @@ export default function MapOutput({ map }) {
         <Animated.View
           style={[styles.sheet, { transform: [{ translateY: sheetTranslateY }] }]}
         >
+          {/* The whole header area drags the sheet, not just the grabber.
+              The responder only claims clearly-vertical moves, so button
+              taps and the Walk/Drive toggle keep working. The steps list
+              stays outside so it can scroll when expanded. */}
+          <View {...sheetPanResponder.panHandlers}>
           <View
             style={styles.grabberTouchArea}
-            {...sheetPanResponder.panHandlers}
             accessible
             accessibilityRole="button"
             accessibilityLabel="Directions sheet handle"
-            accessibilityHint="Drag up for turn-by-turn directions, down to close the map"
+            accessibilityHint="Drag up for more info and directions, down to close the map"
           >
             <View style={styles.grabber} />
           </View>
@@ -774,6 +778,7 @@ export default function MapOutput({ map }) {
           {/* Place details + turn-by-turn — below the fold until the
               sheet is dragged up */}
           <PlaceInfo info={placeInfo} label={label} />
+          </View>
           <StepsList steps={selectedRoute?.steps} />
         </Animated.View>
         </Animated.View>
