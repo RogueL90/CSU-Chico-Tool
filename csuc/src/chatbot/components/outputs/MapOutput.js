@@ -12,7 +12,10 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
+import BottomSheet, {
+  BottomSheetView,
+  BottomSheetScrollView,
+} from '@gorhom/bottom-sheet';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { watchLocation, watchHeading, distanceMeters } from '../../../../maps-api/location';
 import { getRoutes } from '../../../../maps-api/directions';
@@ -138,9 +141,9 @@ export default function MapOutput({ map }) {
   const mapTransition = useRef(new Animated.Value(0)).current;
   const recenterRotation = useRef(new Animated.Value(0)).current;
   // @gorhom/bottom-sheet drives the card: drag anywhere, fluid springs,
-  // scroll<->drag handoff. We only close/reopen it around navigation.
+  // pinned between the low and high snap (never dismissible by swipe —
+  // only the Back to Chat button leaves the map).
   const sheetRef = useRef(null);
-  const navModeRef = useRef(false);
 
   const closeMap = () => {
     Animated.timing(mapTransition, {
@@ -151,13 +154,6 @@ export default function MapOutput({ map }) {
     }).start(({ finished }) => {
       if (finished) setExpanded(false);
     });
-  };
-
-  // Fires when the sheet slides fully off (swipe-down past the low snap
-  // or an explicit .close()). During navigation the sheet is closed on
-  // purpose — the map must stay open.
-  const handleSheetClose = () => {
-    if (!navModeRef.current) closeMap();
   };
 
   const openMap = () => {
@@ -201,7 +197,6 @@ export default function MapOutput({ map }) {
       setSelectedIdx(0);
       setRouteError(false);
       setNavMode(false);
-      navModeRef.current = false;
       setNavStepIdx(0);
       setFollowSuspended(false);
       return;
@@ -401,7 +396,6 @@ export default function MapOutput({ map }) {
   // The sheet is conditionally unmounted during navigation (the nav bar
   // takes over the bottom edge); on exit it remounts at the low snap.
   const startNavigation = () => {
-    navModeRef.current = true;
     setNavMode(true);
     setNavStepIdx(0);
     setFollowSuspended(false);
@@ -409,7 +403,6 @@ export default function MapOutput({ map }) {
   };
 
   const exitNavigation = () => {
-    navModeRef.current = false;
     setNavMode(false);
     setNavStepIdx(0);
     setFollowSuspended(false);
@@ -618,15 +611,12 @@ export default function MapOutput({ map }) {
           ref={sheetRef}
           snapPoints={[COLLAPSED_VISIBLE, SHEET_H]}
           index={0}
-          enablePanDownToClose
-          onClose={handleSheetClose}
+          enableDynamicSizing={false}
+          enablePanDownToClose={false}
           handleIndicatorStyle={styles.grabber}
           backgroundStyle={styles.sheetBg}
         >
-          <BottomSheetScrollView
-            contentContainerStyle={styles.sheetContent}
-            showsVerticalScrollIndicator={false}
-          >
+          <BottomSheetView style={styles.sheetBody}>
           {/* Destination */}
           <Text style={styles.sheetTitle} numberOfLines={1}>{label}</Text>
           {!!address && (
@@ -718,11 +708,19 @@ export default function MapOutput({ map }) {
             )}
           </View>
 
-          {/* Place details + turn-by-turn — below the fold until the
-              sheet is dragged up */}
+          {/* Place details — below the fold until the sheet is dragged up */}
           <PlaceInfo info={placeInfo} label={label} />
-          <StepsList steps={selectedRoute?.steps} />
+
+          {/* Directions get their own scroll area; the rest of the card
+              stays fixed and drags the sheet */}
+          <BottomSheetScrollView
+            style={styles.stepsScroll}
+            contentContainerStyle={styles.stepsScrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            <StepsList steps={selectedRoute?.steps} />
           </BottomSheetScrollView>
+          </BottomSheetView>
         </BottomSheet>
         )}
         </Animated.View>
@@ -868,8 +866,14 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 10,
   },
-  sheetContent: {
+  sheetBody: {
+    flex: 1,
     paddingHorizontal: 20,
+  },
+  stepsScroll: {
+    flex: 1,
+  },
+  stepsScrollContent: {
     paddingBottom: 34, // clears home indicator
   },
   grabber: {
