@@ -6,6 +6,7 @@ import {
   Animated,
   Easing,
   Modal,
+  ScrollView,
   StyleSheet,
   Dimensions,
   StatusBar,
@@ -613,10 +614,14 @@ export default function MapOutput({ map }) {
           handleIndicatorStyle={styles.grabber}
           backgroundStyle={styles.sheetBg}
         >
-          {/* Plain flex View — BottomSheetView pins content to its
-              first measured height and clipped everything below the
-              300px peek (hours, call button, directions). */}
-          <View style={styles.sheetBody}>
+          {/* The whole card body scrolls, so at max height everything
+              is reachable. The directions box below has its own capped
+              inner scroll, keeping the card content finite. */}
+          <BottomSheetScrollView
+            style={styles.sheetBody}
+            contentContainerStyle={styles.sheetBodyContent}
+            showsVerticalScrollIndicator={false}
+          >
           {/* Destination */}
           <Text style={styles.sheetTitle} numberOfLines={1}>{label}</Text>
           {!!address && (
@@ -711,16 +716,18 @@ export default function MapOutput({ map }) {
           {/* Place details — below the fold until the sheet is dragged up */}
           <PlaceInfo info={placeInfo} label={label} />
 
-          {/* Directions get their own scroll area; the rest of the card
-              stays fixed and drags the sheet */}
-          <BottomSheetScrollView
-            style={styles.stepsScroll}
-            contentContainerStyle={styles.stepsScrollContent}
-            showsVerticalScrollIndicator={false}
-          >
-            <StepsList steps={selectedRoute?.steps} />
+          {/* Directions: capped height with its own inner scroll, so the
+              card body never grows unbounded */}
+          {selectedRoute?.steps?.length > 0 && (
+            <ScrollView
+              style={styles.stepsScroll}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator
+            >
+              <StepsList steps={selectedRoute.steps} />
+            </ScrollView>
+          )}
           </BottomSheetScrollView>
-          </View>
         </BottomSheet>
         )}
         </Animated.View>
@@ -868,13 +875,13 @@ const styles = StyleSheet.create({
   },
   sheetBody: {
     flex: 1,
+  },
+  sheetBodyContent: {
     paddingHorizontal: 20,
+    paddingBottom: 34, // clears home indicator
   },
   stepsScroll: {
-    flex: 1,
-  },
-  stepsScrollContent: {
-    paddingBottom: 34, // clears home indicator
+    maxHeight: 300,
   },
   grabber: {
     width: 40,
