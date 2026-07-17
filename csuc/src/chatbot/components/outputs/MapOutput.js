@@ -12,10 +12,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import BottomSheet, {
-  BottomSheetView,
-  BottomSheetScrollView,
-} from '@gorhom/bottom-sheet';
+import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { watchLocation, watchHeading, distanceMeters } from '../../../../maps-api/location';
 import { getRoutes } from '../../../../maps-api/directions';
@@ -616,7 +613,10 @@ export default function MapOutput({ map }) {
           handleIndicatorStyle={styles.grabber}
           backgroundStyle={styles.sheetBg}
         >
-          <BottomSheetView style={styles.sheetBody}>
+          {/* Plain flex View — BottomSheetView pins content to its
+              first measured height and clipped everything below the
+              300px peek (hours, call button, directions). */}
+          <View style={styles.sheetBody}>
           {/* Destination */}
           <Text style={styles.sheetTitle} numberOfLines={1}>{label}</Text>
           {!!address && (
@@ -720,7 +720,7 @@ export default function MapOutput({ map }) {
           >
             <StepsList steps={selectedRoute?.steps} />
           </BottomSheetScrollView>
-          </BottomSheetView>
+          </View>
         </BottomSheet>
         )}
         </Animated.View>
