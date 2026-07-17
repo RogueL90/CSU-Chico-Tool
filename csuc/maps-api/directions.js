@@ -1,8 +1,17 @@
 // Google Directions API — route fetching with alternates and turn-by-turn
 // steps. Replaces react-native-maps-directions so we get the raw data
 // (alternate routes, per-step polylines, maneuvers) the wrapper hides.
+//
+// On web the request goes through the Lambda's /directions proxy:
+// Google's Directions REST API sends no CORS headers, so browsers can't
+// call it directly. The proxy returns Google's JSON verbatim.
+
+import { Platform } from 'react-native';
 
 const DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
+const PROXY_URL = process.env.EXPO_PUBLIC_BACKEND_URL
+  ? `${process.env.EXPO_PUBLIC_BACKEND_URL}/directions`
+  : null;
 
 /**
  * Decode a Google encoded polyline into [{ latitude, longitude }].
@@ -55,17 +64,18 @@ function stripHtml(html) {
  * }
  */
 export async function getRoutes(origin, destination, mode) {
+  const useProxy = Platform.OS === 'web' && PROXY_URL;
   const params = new URLSearchParams({
     origin: `${origin.lat},${origin.lng}`,
     destination: `${destination.lat},${destination.lng}`,
     mode: mode.toLowerCase(),
     alternatives: 'true',
     units: 'imperial',
-    key: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY,
+    ...(useProxy ? {} : { key: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY }),
   });
 
   try {
-    const response = await fetch(`${DIRECTIONS_URL}?${params}`);
+    const response = await fetch(`${useProxy ? PROXY_URL : DIRECTIONS_URL}?${params}`);
     const data = await response.json();
 
     if (data.status !== 'OK' || !data.routes?.length) {

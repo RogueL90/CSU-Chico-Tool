@@ -60,6 +60,8 @@ const ACCESSORY_TRANSITION = {
 };
 
 function animateAccessoryTransition() {
+  // LayoutAnimation is a no-op on web and logs warnings.
+  if (Platform.OS === 'web') return;
   LayoutAnimation.configureNext(ACCESSORY_TRANSITION);
 }
 
@@ -495,6 +497,7 @@ export default function ChatScreen() {
   }, [welcomeAnim, restartAnim, composerHeight]);
 
   const handleComposerSizeChange = useCallback((event) => {
+    if (Platform.OS === 'web') return; // web sizing handled by the effect below
     const nextHeight = Math.min(96, Math.max(40, event.nativeEvent.contentSize.height + 2));
     Animated.timing(composerHeight, {
       toValue: nextHeight,
@@ -503,6 +506,27 @@ export default function ChatScreen() {
       useNativeDriver: false,
     }).start();
   }, [composerHeight]);
+
+  // Web composer auto-size. A textarea's scrollHeight never reports
+  // smaller after text is deleted unless its height is collapsed before
+  // measuring — so the box grew but never shrank back. react-native-web
+  // exposes the DOM node via the ref.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const node = inputRef.current;
+    if (!node?.style) return;
+    // The textarea is a flex child — flexbox re-stretches it even with
+    // height 0, so flex must be disabled during measurement or
+    // scrollHeight never reports smaller than the current box.
+    const previousHeight = node.style.height;
+    const previousFlex = node.style.flex;
+    node.style.flex = '0 0 auto';
+    node.style.height = '0px';
+    const contentHeight = node.scrollHeight;
+    node.style.flex = previousFlex || '';
+    node.style.height = previousHeight || '';
+    composerHeight.setValue(Math.min(96, Math.max(40, contentHeight + 2)));
+  }, [inputText, composerHeight]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -795,9 +819,15 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     paddingHorizontal: 16,
-    paddingVertical: Platform.OS === 'ios' ? 9 : 7,
     fontSize: 15,
     color: '#2C2022',
+    // Web has no textAlignVertical: center a 20px line in the 40px box
+    // with symmetric padding instead.
+    ...Platform.select({
+      web: { paddingVertical: 10, lineHeight: 20 },
+      ios: { paddingVertical: 9 },
+      default: { paddingVertical: 7 },
+    }),
   },
   sendBtn: {
     backgroundColor: '#C8102E',
