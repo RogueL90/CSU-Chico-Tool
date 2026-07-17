@@ -5,13 +5,14 @@ import {
   TouchableOpacity,
   Animated,
   Easing,
-  PanResponder,
   Modal,
   StyleSheet,
   Dimensions,
   StatusBar,
   ActivityIndicator,
 } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { watchLocation, watchHeading, distanceMeters } from '../../../../maps-api/location';
 import { getRoutes } from '../../../../maps-api/directions';
@@ -39,11 +40,10 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const MINI_W = Math.round(SCREEN_WIDTH * 0.72);
 const MINI_H = 130;
 
-// Bottom sheet snap geometry: the sheet is always SHEET_H tall; translateY
-// slides it between expanded (0), collapsed (summary only), and dismissed.
+// Bottom sheet snap points: low snap shows the summary (name, modes,
+// ETA, buttons); high snap reveals place details + turn-by-turn.
 const SHEET_H = Math.round(SCREEN_HEIGHT * 0.65);
 const COLLAPSED_VISIBLE = 300;
-const COLLAPSED_OFFSET = Math.max(0, SHEET_H - COLLAPSED_VISIBLE);
 
 const MINI_DELTA = 0.004;
 const FULL_DELTA = 0.003;
@@ -135,55 +135,29 @@ export default function MapOutput({ map }) {
   // fresh native map is the only reliable recovery.
   const [mapEpoch, setMapEpoch] = useState(0);
   const pendingFitRef = useRef(false);
-  const sheetTranslateY = useRef(new Animated.Value(SHEET_H)).current;
   const mapTransition = useRef(new Animated.Value(0)).current;
   const recenterRotation = useRef(new Animated.Value(0)).current;
-  // Which snap point the sheet is resting at: 'collapsed' | 'expanded'.
-  // Mirrored in state so the steps list can enable/disable scrolling.
-  const snapRef = useRef('collapsed');
-  const [sheetSnap, setSheetSnap] = useState('collapsed');
-  const setSnap = useRef((v) => {
-    snapRef.current = v;
-    setSheetSnap(v);
-  }).current;
-  // Whether the steps list is scrolled to its very top — a downward drag
-  // may only grab the sheet (Google Maps style) when this is true.
-  const listAtTopRef = useRef(true);
-
-  const snapTo = (value, onDone) => {
-    Animated.timing(sheetTranslateY, {
-      toValue: value,
-      duration: 200,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (finished) onDone?.();
-    });
-  };
-
-  const finishClosingMap = () => {
-    setExpanded(false);
-    setSnap('collapsed');
-    sheetTranslateY.setValue(SHEET_H);
-  };
+  // @gorhom/bottom-sheet drives the card: drag anywhere, fluid springs,
+  // scroll<->drag handoff. We only close/reopen it around navigation.
+  const sheetRef = useRef(null);
+  const navModeRef = useRef(false);
 
   const closeMap = () => {
-    Animated.parallel([
-      Animated.timing(sheetTranslateY, {
-        toValue: SHEET_H,
-        duration: 190,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(mapTransition, {
-        toValue: 0,
-        duration: 190,
-        easing: Easing.inOut(Easing.quad),
-        useNativeDriver: true,
-      }),
-    ]).start(({ finished }) => {
-      if (finished) finishClosingMap();
+    Animated.timing(mapTransition, {
+      toValue: 0,
+      duration: 190,
+      easing: Easing.inOut(Easing.quad),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) setExpanded(false);
     });
+  };
+
+  // Fires when the sheet slides fully off (swipe-down past the low snap
+  // or an explicit .close()). During navigation the sheet is closed on
+  // purpose — the map must stay open.
+  const handleSheetClose = () => {
+    if (!navModeRef.current) closeMap();
   };
 
   const openMap = () => {
@@ -220,57 +194,6 @@ export default function MapOutput({ map }) {
     }
   };
 
-  // Google Maps-style sheet gesture: the whole card is one drag surface.
-  // Collapsed, any vertical drag moves the sheet. Expanded, the steps
-  // list owns upward drags and downward drags while it's mid-scroll;
-  // once the list is back at its top, dragging down grabs the sheet
-  // itself (capture phase steals the gesture before the list sees it).
-  const shouldGrabSheet = (gesture) => {
-    const vertical =
-      Math.abs(gesture.dy) > 5 && Math.abs(gesture.dy) > Math.abs(gesture.dx);
-    if (!vertical) return false;
-    if (snapRef.current === 'collapsed') return true;
-    return gesture.dy > 0 && listAtTopRef.current;
-  };
-
-  const sheetPanResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gesture) => shouldGrabSheet(gesture),
-      onMoveShouldSetPanResponderCapture: (_, gesture) => shouldGrabSheet(gesture),
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderMove: (_, gesture) => {
-        const base = snapRef.current === 'expanded' ? 0 : COLLAPSED_OFFSET;
-        const next = Math.min(SHEET_H, Math.max(0, base + gesture.dy));
-        sheetTranslateY.setValue(next);
-      },
-      onPanResponderRelease: (_, gesture) => {
-        const fast = Math.abs(gesture.vy) > 0.5;
-        if (snapRef.current === 'collapsed') {
-          if (gesture.dy < -40 || (fast && gesture.vy < 0)) {
-            setSnap('expanded');
-            snapTo(0);
-          } else if (gesture.dy > 70 || (fast && gesture.vy > 0)) {
-            closeMap();
-          } else {
-            snapTo(COLLAPSED_OFFSET);
-          }
-        } else {
-          if (gesture.dy > COLLAPSED_OFFSET + 80) {
-            closeMap();
-          } else if (gesture.dy > 50 || (fast && gesture.vy > 0)) {
-            setSnap('collapsed');
-            snapTo(COLLAPSED_OFFSET);
-          } else {
-            snapTo(0);
-          }
-        }
-      },
-      onPanResponderTerminate: () => {
-        snapTo(snapRef.current === 'expanded' ? 0 : COLLAPSED_OFFSET);
-      },
-    })
-  ).current;
-
   // Track position + compass at navigation accuracy while the map is open
   useEffect(() => {
     if (!expanded) {
@@ -278,14 +201,11 @@ export default function MapOutput({ map }) {
       setSelectedIdx(0);
       setRouteError(false);
       setNavMode(false);
+      navModeRef.current = false;
       setNavStepIdx(0);
       setFollowSuspended(false);
       return;
     }
-
-    setSnap('collapsed');
-    sheetTranslateY.setValue(SHEET_H);
-    snapTo(COLLAPSED_OFFSET);
 
     let stopPos = null;
     let stopHeading = null;
@@ -478,20 +398,21 @@ export default function MapOutput({ map }) {
         )
       : null;
 
+  // The sheet is conditionally unmounted during navigation (the nav bar
+  // takes over the bottom edge); on exit it remounts at the low snap.
   const startNavigation = () => {
+    navModeRef.current = true;
     setNavMode(true);
     setNavStepIdx(0);
     setFollowSuspended(false);
     offRouteCountRef.current = 0;
-    snapTo(SHEET_H); // hide the sheet; nav bar takes over
   };
 
   const exitNavigation = () => {
+    navModeRef.current = false;
     setNavMode(false);
     setNavStepIdx(0);
     setFollowSuspended(false);
-    setSnap('collapsed');
-    snapTo(COLLAPSED_OFFSET);
     // Remount the map instead of mutating the existing one back to browse
     // state — the fit happens in onMapReady once the new map is live.
     pendingFitRef.current = true;
@@ -562,6 +483,8 @@ export default function MapOutput({ map }) {
       >
         <StatusBar barStyle="dark-content" />
 
+        {/* RNGH needs its own root inside a RN Modal */}
+        <GestureHandlerRootView style={{ flex: 1 }}>
         <Animated.View style={[styles.modalScene, {
           opacity: mapTransition,
           transform: [{ scale: mapTransition.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) }],
@@ -687,21 +610,23 @@ export default function MapOutput({ map }) {
           </View>
         )}
 
-        {/* ── Bottom sheet — one drag surface, Google Maps style ── */}
-        <Animated.View
-          style={[styles.sheet, { transform: [{ translateY: sheetTranslateY }] }]}
-          {...sheetPanResponder.panHandlers}
+        {/* ── Bottom sheet — Google Maps physics via @gorhom/bottom-sheet:
+            drag anywhere on the card, fluid snaps, swipe past the low
+            snap to dismiss, scroll<->drag handoff at the top snap ── */}
+        {!navMode && (
+        <BottomSheet
+          ref={sheetRef}
+          snapPoints={[COLLAPSED_VISIBLE, SHEET_H]}
+          index={0}
+          enablePanDownToClose
+          onClose={handleSheetClose}
+          handleIndicatorStyle={styles.grabber}
+          backgroundStyle={styles.sheetBg}
         >
-          <View
-            style={styles.grabberTouchArea}
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel="Directions sheet handle"
-            accessibilityHint="Drag up for more info and directions, down to close the map"
+          <BottomSheetScrollView
+            contentContainerStyle={styles.sheetContent}
+            showsVerticalScrollIndicator={false}
           >
-            <View style={styles.grabber} />
-          </View>
-
           {/* Destination */}
           <Text style={styles.sheetTitle} numberOfLines={1}>{label}</Text>
           {!!address && (
@@ -796,15 +721,12 @@ export default function MapOutput({ map }) {
           {/* Place details + turn-by-turn — below the fold until the
               sheet is dragged up */}
           <PlaceInfo info={placeInfo} label={label} />
-          <StepsList
-            steps={selectedRoute?.steps}
-            scrollEnabled={sheetSnap === 'expanded'}
-            onScroll={(e) => {
-              listAtTopRef.current = e.nativeEvent.contentOffset.y <= 1;
-            }}
-          />
+          <StepsList steps={selectedRoute?.steps} />
+          </BottomSheetScrollView>
+        </BottomSheet>
+        )}
         </Animated.View>
-        </Animated.View>
+        </GestureHandlerRootView>
       </Modal>
     </View>
   );
@@ -936,36 +858,25 @@ const styles = StyleSheet.create({
   },
 
   /* ── Bottom sheet ── */
-  sheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: SHEET_H,
+  sheetBg: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 34, // clears home indicator
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.12,
     shadowRadius: 12,
     elevation: 10,
   },
+  sheetContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 34, // clears home indicator
+  },
   grabber: {
     width: 40,
     height: 4,
     borderRadius: 2,
     backgroundColor: '#C7C7CC',
-  },
-  grabberTouchArea: {
-    minHeight: 36,
-    marginTop: -6,
-    marginBottom: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   sheetTitle: {
     fontSize: 19,

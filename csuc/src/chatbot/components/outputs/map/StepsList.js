@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, FlatList, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 
 // Directions API maneuver strings -> compact glyphs
 const MANEUVER_GLYPHS = {
@@ -26,35 +26,23 @@ export function maneuverGlyph(maneuver) {
 }
 
 /**
- * Scrollable turn-by-turn directions for the selected route.
+ * Turn-by-turn directions for the selected route. Renders plain rows —
+ * the bottom sheet's own scroll view does the scrolling, which is what
+ * lets the sheet hand off between dragging and scrolling seamlessly.
  *
  * Props:
- *   steps         - [{ instruction, distanceText, maneuver }]
- *   currentStep   - optional index to highlight (navigation mode)
- *   scrollEnabled - list scrolling on/off (off while the sheet is collapsed
- *                   so drags move the sheet instead)
- *   onScroll      - forwarded to the list (sheet tracks scroll-at-top)
+ *   steps       - [{ instruction, distanceText, maneuver }]
+ *   currentStep - optional index to highlight (navigation mode)
  */
-export default function StepsList({
-  steps,
-  currentStep = -1,
-  scrollEnabled = true,
-  onScroll,
-}) {
+export default function StepsList({ steps, currentStep = -1 }) {
   if (!steps?.length) return null;
 
   return (
     <View style={styles.container}>
       <Text style={styles.heading}>Directions</Text>
-      <FlatList
-        data={steps}
-        keyExtractor={(_, i) => String(i)}
-        showsVerticalScrollIndicator={false}
-        scrollEnabled={scrollEnabled}
-        onScroll={onScroll}
-        scrollEventThrottle={16}
-        bounces={false}
-        renderItem={({ item, index }) => (
+      {steps.map((item, index) => (
+        <View key={index}>
+          {index > 0 && <View style={styles.separator} />}
           <View style={[styles.row, index === currentStep && styles.rowActive]}>
             <Text style={styles.glyph}>{maneuverGlyph(item.maneuver)}</Text>
             <View style={styles.rowText}>
@@ -64,16 +52,14 @@ export default function StepsList({
               )}
             </View>
           </View>
-        )}
-        ItemSeparatorComponent={() => <View style={styles.separator} />}
-      />
+        </View>
+      ))}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
     marginTop: 14,
   },
   heading: {
