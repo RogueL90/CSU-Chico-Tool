@@ -148,6 +148,9 @@ export default function MapOutput({ map }) {
   const [routes, setRoutes] = useState([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [fetching, setFetching] = useState(false);
+  // Safari remembers a denial and never re-prompts — when we detect it,
+  // show unblock instructions instead of the eternal 'allow' hint.
+  const [locDenied, setLocDenied] = useState(false);
   // Live navigation mode (ported from the native MapOutput)
   const [liveLoc, setLiveLoc] = useState(null);
   const [navMode, setNavMode] = useState(false);
@@ -242,7 +245,11 @@ export default function MapOutput({ map }) {
             : prev
         );
       },
-      () => {}, // denied/unavailable -> map still shows the destination
+      (error) => {
+        // Map still shows the destination; surface a real denial so the
+        // sheet can explain how to unblock the site.
+        if (error?.code === error?.PERMISSION_DENIED) setLocDenied(true);
+      },
       { enableHighAccuracy: true, maximumAge: 5000 }
     );
     return () => {
@@ -616,7 +623,12 @@ export default function MapOutput({ map }) {
 
               {/* ETA */}
               <View style={styles.etaRow}>
-                {!origin ? (
+                {locDenied && !origin ? (
+                  <Text style={styles.etaHint}>
+                    Location is blocked for this site. In Safari tap ᴀA in the
+                    address bar → Website Settings → Location → Allow, then reload.
+                  </Text>
+                ) : !origin ? (
                   <Text style={styles.etaHint}>
                     Allow location access to see the route from where you are.
                   </Text>

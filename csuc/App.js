@@ -10,7 +10,7 @@ if (Platform.OS === 'web' && typeof document !== 'undefined') {
   const style = document.createElement('style');
   style.textContent = `
     body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-    textarea { outline: none; scrollbar-width: none; }
+    textarea { outline: none; scrollbar-width: none; resize: none; background: transparent; border-radius: 22px; }
     textarea::-webkit-scrollbar { display: none; }
   `;
   document.head.appendChild(style);

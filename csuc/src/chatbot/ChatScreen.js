@@ -819,14 +819,14 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     paddingHorizontal: 16,
-    fontSize: 15,
     color: '#2C2022',
-    // Web has no textAlignVertical: center a 20px line in the 40px box
-    // with symmetric padding instead.
+    // Web: 16px is the iOS Safari no-auto-zoom threshold, and there is
+    // no textAlignVertical — center a 20px line in the 40px box with
+    // symmetric padding instead.
     ...Platform.select({
-      web: { paddingVertical: 10, lineHeight: 20 },
-      ios: { paddingVertical: 9 },
-      default: { paddingVertical: 7 },
+      web: { fontSize: 16, paddingVertical: 10, lineHeight: 20 },
+      ios: { fontSize: 15, paddingVertical: 9 },
+      default: { fontSize: 15, paddingVertical: 7 },
     }),
   },
   sendBtn: {
