@@ -29,10 +29,18 @@ export function maneuverGlyph(maneuver) {
  * Scrollable turn-by-turn directions for the selected route.
  *
  * Props:
- *   steps       - [{ instruction, distanceText, maneuver }]
- *   currentStep - optional index to highlight (navigation mode)
+ *   steps         - [{ instruction, distanceText, maneuver }]
+ *   currentStep   - optional index to highlight (navigation mode)
+ *   scrollEnabled - list scrolling on/off (off while the sheet is collapsed
+ *                   so drags move the sheet instead)
+ *   onScroll      - forwarded to the list (sheet tracks scroll-at-top)
  */
-export default function StepsList({ steps, currentStep = -1 }) {
+export default function StepsList({
+  steps,
+  currentStep = -1,
+  scrollEnabled = true,
+  onScroll,
+}) {
   if (!steps?.length) return null;
 
   return (
@@ -42,6 +50,10 @@ export default function StepsList({ steps, currentStep = -1 }) {
         data={steps}
         keyExtractor={(_, i) => String(i)}
         showsVerticalScrollIndicator={false}
+        scrollEnabled={scrollEnabled}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        bounces={false}
         renderItem={({ item, index }) => (
           <View style={[styles.row, index === currentStep && styles.rowActive]}>
             <Text style={styles.glyph}>{maneuverGlyph(item.maneuver)}</Text>

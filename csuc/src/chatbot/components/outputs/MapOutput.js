@@ -138,8 +138,17 @@ export default function MapOutput({ map }) {
   const sheetTranslateY = useRef(new Animated.Value(SHEET_H)).current;
   const mapTransition = useRef(new Animated.Value(0)).current;
   const recenterRotation = useRef(new Animated.Value(0)).current;
-  // Which snap point the sheet is resting at: 'collapsed' | 'expanded'
+  // Which snap point the sheet is resting at: 'collapsed' | 'expanded'.
+  // Mirrored in state so the steps list can enable/disable scrolling.
   const snapRef = useRef('collapsed');
+  const [sheetSnap, setSheetSnap] = useState('collapsed');
+  const setSnap = useRef((v) => {
+    snapRef.current = v;
+    setSheetSnap(v);
+  }).current;
+  // Whether the steps list is scrolled to its very top — a downward drag
+  // may only grab the sheet (Google Maps style) when this is true.
+  const listAtTopRef = useRef(true);
 
   const snapTo = (value, onDone) => {
     Animated.timing(sheetTranslateY, {
@@ -154,7 +163,7 @@ export default function MapOutput({ map }) {
 
   const finishClosingMap = () => {
     setExpanded(false);
-    snapRef.current = 'collapsed';
+    setSnap('collapsed');
     sheetTranslateY.setValue(SHEET_H);
   };
 
@@ -211,11 +220,24 @@ export default function MapOutput({ map }) {
     }
   };
 
-  // Drag between snap points: collapsed <-> expanded, or down to dismiss.
+  // Google Maps-style sheet gesture: the whole card is one drag surface.
+  // Collapsed, any vertical drag moves the sheet. Expanded, the steps
+  // list owns upward drags and downward drags while it's mid-scroll;
+  // once the list is back at its top, dragging down grabs the sheet
+  // itself (capture phase steals the gesture before the list sees it).
+  const shouldGrabSheet = (gesture) => {
+    const vertical =
+      Math.abs(gesture.dy) > 5 && Math.abs(gesture.dy) > Math.abs(gesture.dx);
+    if (!vertical) return false;
+    if (snapRef.current === 'collapsed') return true;
+    return gesture.dy > 0 && listAtTopRef.current;
+  };
+
   const sheetPanResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gesture) =>
-        Math.abs(gesture.dy) > 5 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
+      onMoveShouldSetPanResponder: (_, gesture) => shouldGrabSheet(gesture),
+      onMoveShouldSetPanResponderCapture: (_, gesture) => shouldGrabSheet(gesture),
+      onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_, gesture) => {
         const base = snapRef.current === 'expanded' ? 0 : COLLAPSED_OFFSET;
         const next = Math.min(SHEET_H, Math.max(0, base + gesture.dy));
@@ -225,7 +247,7 @@ export default function MapOutput({ map }) {
         const fast = Math.abs(gesture.vy) > 0.5;
         if (snapRef.current === 'collapsed') {
           if (gesture.dy < -40 || (fast && gesture.vy < 0)) {
-            snapRef.current = 'expanded';
+            setSnap('expanded');
             snapTo(0);
           } else if (gesture.dy > 70 || (fast && gesture.vy > 0)) {
             closeMap();
@@ -236,7 +258,7 @@ export default function MapOutput({ map }) {
           if (gesture.dy > COLLAPSED_OFFSET + 80) {
             closeMap();
           } else if (gesture.dy > 50 || (fast && gesture.vy > 0)) {
-            snapRef.current = 'collapsed';
+            setSnap('collapsed');
             snapTo(COLLAPSED_OFFSET);
           } else {
             snapTo(0);
@@ -261,7 +283,7 @@ export default function MapOutput({ map }) {
       return;
     }
 
-    snapRef.current = 'collapsed';
+    setSnap('collapsed');
     sheetTranslateY.setValue(SHEET_H);
     snapTo(COLLAPSED_OFFSET);
 
@@ -468,7 +490,7 @@ export default function MapOutput({ map }) {
     setNavMode(false);
     setNavStepIdx(0);
     setFollowSuspended(false);
-    snapRef.current = 'collapsed';
+    setSnap('collapsed');
     snapTo(COLLAPSED_OFFSET);
     // Remount the map instead of mutating the existing one back to browse
     // state — the fit happens in onMapReady once the new map is live.
@@ -665,15 +687,11 @@ export default function MapOutput({ map }) {
           </View>
         )}
 
-        {/* ── Bottom sheet ── */}
+        {/* ── Bottom sheet — one drag surface, Google Maps style ── */}
         <Animated.View
           style={[styles.sheet, { transform: [{ translateY: sheetTranslateY }] }]}
+          {...sheetPanResponder.panHandlers}
         >
-          {/* The whole header area drags the sheet, not just the grabber.
-              The responder only claims clearly-vertical moves, so button
-              taps and the Walk/Drive toggle keep working. The steps list
-              stays outside so it can scroll when expanded. */}
-          <View {...sheetPanResponder.panHandlers}>
           <View
             style={styles.grabberTouchArea}
             accessible
@@ -778,8 +796,13 @@ export default function MapOutput({ map }) {
           {/* Place details + turn-by-turn — below the fold until the
               sheet is dragged up */}
           <PlaceInfo info={placeInfo} label={label} />
-          </View>
-          <StepsList steps={selectedRoute?.steps} />
+          <StepsList
+            steps={selectedRoute?.steps}
+            scrollEnabled={sheetSnap === 'expanded'}
+            onScroll={(e) => {
+              listAtTopRef.current = e.nativeEvent.contentOffset.y <= 1;
+            }}
+          />
         </Animated.View>
         </Animated.View>
       </Modal>
